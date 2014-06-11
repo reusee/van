@@ -21,16 +21,19 @@ type Session struct {
 
 	packetsIn chan []byte
 	packets   chan []byte
+
+	getConnsLen chan int
 }
 
 func makeSession() *Session {
 	session := &Session{
-		Closer:    closer.NewCloser(),
-		Signaler:  NewSignaler(),
-		newConnIn: make(chan net.Conn),
-		newConn:   make(chan net.Conn),
-		packetsIn: make(chan []byte),
-		packets:   make(chan []byte),
+		Closer:      closer.NewCloser(),
+		Signaler:    NewSignaler(),
+		newConnIn:   make(chan net.Conn),
+		newConn:     make(chan net.Conn),
+		packetsIn:   make(chan []byte),
+		packets:     make(chan []byte),
+		getConnsLen: make(chan int),
 	}
 	l1 := ic.Link(session.newConnIn, session.newConn)
 	l2 := ic.Link(session.packetsIn, session.packets)
@@ -52,6 +55,9 @@ func (s *Session) start() {
 		case packet := <-s.packets: // incoming packet
 			//TODO
 			_ = packet
+
+		// getters
+		case s.getConnsLen <- len(s.conns):
 		}
 	}
 }

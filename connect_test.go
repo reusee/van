@@ -56,7 +56,7 @@ func TestConnect(t *testing.T) {
 		}
 		select {
 		case <-newConn:
-			if len(client.conns) != len(serverSession.conns) {
+			if <-client.getConnsLen != <-serverSession.getConnsLen {
 				t.Fatalf("NewConn")
 			}
 		case <-time.After(time.Second):
