@@ -12,8 +12,6 @@ import (
 
 type Server struct {
 	closer.Closer
-	closing  bool
-	sigClose chan bool
 
 	sessions    map[uint64]*Session
 	connSidChan chan connSidInfo
@@ -33,7 +31,7 @@ func NewServer(addrStr string) (*Server, error) {
 		return nil, err
 	}
 	server := &Server{
-		sigClose:     make(chan bool),
+		Closer:       closer.NewCloser(),
 		sessions:     make(map[uint64]*Session),
 		connSidChan:  make(chan connSidInfo),
 		newSessionIn: make(chan *Session),
@@ -46,7 +44,7 @@ func NewServer(addrStr string) (*Server, error) {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
-				if server.closing { // close normally
+				if server.IsClosing { // close normally
 					return
 				} else {
 					log.Fatal(err)
@@ -60,7 +58,7 @@ func NewServer(addrStr string) (*Server, error) {
 	go func() {
 		for {
 			select {
-			case <-server.sigClose:
+			case <-server.WaitClosing:
 				return
 			case info := <-server.connSidChan:
 				session, ok := server.sessions[info.sessionId]
@@ -77,9 +75,7 @@ func NewServer(addrStr string) (*Server, error) {
 
 	// closer
 	server.OnClose(func() {
-		server.closing = true
 		ln.Close() // close listener
-		close(server.sigClose)
 		close(server.newSessionIn)
 	})
 
@@ -98,9 +94,12 @@ func (s *Server) handleClient(conn net.Conn) {
 		return
 	}
 	// send to session manager
-	s.connSidChan <- connSidInfo{
+	select {
+	case s.connSidChan <- connSidInfo{
 		conn:      conn,
 		sessionId: sessionId,
+	}:
+	default:
 	}
 }
 
