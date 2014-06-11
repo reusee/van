@@ -1,6 +1,7 @@
 package van
 
 import (
+	"encoding/binary"
 	"net"
 
 	"github.com/reusee/closer"
@@ -16,6 +17,10 @@ type Session struct {
 
 	newConnIn chan net.Conn
 	newConn   chan net.Conn
+	errConn   chan net.Conn
+
+	packetsIn chan []byte
+	packets   chan []byte
 }
 
 func makeSession() *Session {
@@ -24,10 +29,14 @@ func makeSession() *Session {
 		Signaler:  NewSignaler(),
 		newConnIn: make(chan net.Conn),
 		newConn:   make(chan net.Conn),
+		packetsIn: make(chan []byte),
+		packets:   make(chan []byte),
 	}
-	ic.Link(session.newConnIn, session.newConn)
+	l1 := ic.Link(session.newConnIn, session.newConn)
+	l2 := ic.Link(session.packetsIn, session.packets)
 	session.OnClose(func() {
-		close(session.newConnIn)
+		close(l1)
+		close(l2)
 	})
 	go session.start()
 	return session
@@ -40,6 +49,9 @@ func (s *Session) start() {
 			return
 		case conn := <-s.newConn: // new connection
 			s.addConn(conn)
+		case packet := <-s.packets: // incoming packet
+			//TODO
+			_ = packet
 		}
 	}
 }
@@ -47,4 +59,36 @@ func (s *Session) start() {
 func (s *Session) addConn(conn net.Conn) {
 	s.conns = append(s.conns, conn)
 	s.Signal("NewConn")
+	// close conn when session close
+	s.OnClose(func() {
+		conn.Close()
+	})
+	// start reader
+	go func() {
+		var length uint16
+		for {
+			// read packet length
+			err := binary.Read(conn, binary.LittleEndian, &length)
+			if err != nil {
+				if s.IsClosing { // session is closing
+					return
+				} else { // conn error
+					s.errConn <- conn
+					return
+				}
+			}
+			// read packet
+			packetData := make([]byte, length)
+			n, err := conn.Read(packetData)
+			if err != nil || n != int(length) {
+				if s.IsClosing { // session is closing
+					return
+				} else { // conn error
+					s.errConn <- conn
+					return
+				}
+			}
+			s.packetsIn <- packetData
+		}
+	}()
 }

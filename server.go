@@ -37,7 +37,11 @@ func NewServer(addrStr string) (*Server, error) {
 		newSessionIn: make(chan *Session),
 		NewSession:   make(chan *Session),
 	}
-	ic.Link(server.newSessionIn, server.NewSession)
+	l1 := ic.Link(server.newSessionIn, server.NewSession)
+	server.OnClose(func() {
+		ln.Close() // close listener
+		close(l1)
+	})
 
 	// accept
 	go func() {
@@ -72,12 +76,6 @@ func NewServer(addrStr string) (*Server, error) {
 			}
 		}
 	}()
-
-	// closer
-	server.OnClose(func() {
-		ln.Close() // close listener
-		close(server.newSessionIn)
-	})
 
 	return server, nil
 }
