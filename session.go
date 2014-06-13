@@ -57,14 +57,14 @@ func makeSession() *Session {
 	session := &Session{
 		Closer:             closer.NewCloser(),
 		Signaler:           NewSignaler(),
-		newConn:            make(chan net.Conn),
+		newConn:            make(chan net.Conn, 128),
 		errConn:            make(chan net.Conn),
 		incomingPackets:    make(chan *Packet),
 		incomingAcks:       make(chan uint32),
 		sendingPacketsMap:  make(map[uint32]*Packet),
 		sendingPacketsList: list.New(),
 		outPackets:         make(chan *Packet),
-		maxSendingBytes:    4 * 1024,
+		maxSendingBytes:    16 * 1024,
 		outCheckTicker:     time.NewTicker(time.Millisecond * 100),
 		incomingHeap:       new(Heap),
 		recvIn:             make(chan []byte),
@@ -200,7 +200,9 @@ func (s *Session) delConn(conn net.Conn) {
 		}
 	}
 	if index > 0 { // delete
+		s.Log("delete conn")
 		s.conns[index].Close()
+		s.Signal("DelConn")
 		s.conns = append(s.conns[:index], s.conns[index+1:]...)
 	}
 	if len(s.conns) == 0 {
