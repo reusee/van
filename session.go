@@ -33,8 +33,6 @@ type Session struct {
 	incomingPackets chan *Packet
 	incomingAcks    chan uint32
 
-	getConnsLen chan int
-
 	serial             uint32
 	ackSerial          uint32
 	sendingPacketsMap  map[uint32]*Packet
@@ -48,7 +46,11 @@ type Session struct {
 	recvIn       chan []byte
 	Recv         chan []byte
 
-	StatResend int
+	statResend int
+
+	// getters
+	getConnsLen   chan int
+	getStatResend chan int
 }
 
 func makeSession() *Session {
@@ -59,7 +61,6 @@ func makeSession() *Session {
 		errConn:            make(chan net.Conn),
 		incomingPackets:    make(chan *Packet),
 		incomingAcks:       make(chan uint32),
-		getConnsLen:        make(chan int),
 		sendingPacketsMap:  make(map[uint32]*Packet),
 		sendingPacketsList: list.New(),
 		outPackets:         make(chan *Packet),
@@ -68,11 +69,14 @@ func makeSession() *Session {
 		incomingHeap:       new(Heap),
 		recvIn:             make(chan []byte),
 		Recv:               make(chan []byte),
+		getConnsLen:        make(chan int),
+		getStatResend:      make(chan int),
 	}
 	heap.Init(session.incomingHeap)
 	recvLink := ic.Link(session.recvIn, session.Recv)
 	session.OnClose(func() {
 		close(recvLink)
+		session.CloseSignaler()
 	})
 	go session.start()
 	return session
@@ -103,6 +107,7 @@ func (s *Session) start() {
 				s.checkSendingPackets()
 			// getters
 			case s.getConnsLen <- len(s.conns):
+			case s.getStatResend <- s.statResend:
 			}
 		} else {
 			select {
@@ -123,6 +128,7 @@ func (s *Session) start() {
 				s.checkSendingPackets()
 			// getters
 			case s.getConnsLen <- len(s.conns):
+			case s.getStatResend <- s.statResend:
 			}
 		}
 	}
@@ -250,7 +256,7 @@ func (s *Session) sendPacket(packet *Packet) {
 	} else {
 		packet.resendTimeout *= 2
 		// stat
-		s.StatResend++
+		s.statResend++
 	}
 }
 

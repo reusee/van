@@ -15,7 +15,7 @@ func TestSend(t *testing.T) {
 	}
 	defer server.Close()
 
-	n := 100000
+	n := 2048
 	serverDone := make(chan bool)
 
 	go func() {
@@ -59,5 +59,5 @@ func TestSend(t *testing.T) {
 
 	<-serverDone
 
-	fmt.Printf("resend %d\n", client.StatResend)
+	fmt.Printf("resend %d\n", <-client.getStatResend)
 }

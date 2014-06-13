@@ -1,35 +1,49 @@
 package van
 
-import "sync"
-
 type Signaler struct {
-	cbs  map[string][]interface{}
-	lock sync.Mutex
+	cbs   map[string][]interface{}
+	calls chan func()
 }
 
 func NewSignaler() *Signaler {
-	return &Signaler{
-		cbs: make(map[string][]interface{}),
+	s := &Signaler{
+		cbs:   make(map[string][]interface{}),
+		calls: make(chan func()),
 	}
+	go func() {
+		for f := range s.calls {
+			if f == nil {
+				return
+			}
+			f()
+		}
+	}()
+	return s
+}
+
+func (s *Signaler) CloseSignaler() {
+	s.calls <- nil
 }
 
 func (s *Signaler) OnSignal(signal string, f interface{}) {
-	s.lock.Lock()
-	s.cbs[signal] = append(s.cbs[signal], f)
-	s.lock.Unlock()
+	s.calls <- func() {
+		s.cbs[signal] = append(s.cbs[signal], f)
+	}
 }
 
 func (s *Signaler) Signal(signal string, args ...interface{}) {
-	for _, f := range s.cbs[signal] {
-		switch fun := f.(type) {
-		case func():
-			fun()
-		case func(interface{}):
-			fun(args[0])
-		case func(...interface{}):
-			fun(args...)
-		default:
-			panic("invalid signal hadler")
+	s.calls <- func() {
+		for _, f := range s.cbs[signal] {
+			switch fun := f.(type) {
+			case func():
+				fun()
+			case func(interface{}):
+				fun(args[0])
+			case func(...interface{}):
+				fun(args...)
+			default:
+				panic("invalid signal hadler")
+			}
 		}
 	}
 }
