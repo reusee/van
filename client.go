@@ -36,6 +36,6 @@ func (c *Client) NewConn() error {
 	if err != nil {
 		return err
 	}
-	c.newConnIn <- conn
+	c.newConn <- conn
 	return nil
 }

@@ -27,15 +27,11 @@ type Session struct {
 	id    uint64
 	conns []net.Conn
 
-	newConnIn chan net.Conn
-	newConn   chan net.Conn
-	errConnIn chan net.Conn
-	errConn   chan net.Conn
+	newConn chan net.Conn
+	errConn chan net.Conn
 
-	incomingPacketsIn chan *Packet
-	incomingPackets   chan *Packet
-	incomingAcksIn    chan uint32
-	incomingAcks      chan uint32
+	incomingPackets chan *Packet
+	incomingAcks    chan uint32
 
 	getConnsLen chan int
 
@@ -43,7 +39,6 @@ type Session struct {
 	ackSerial          uint32
 	sendingPacketsMap  map[uint32]*Packet
 	sendingPacketsList *list.List
-	outPacketsIn       chan *Packet
 	outPackets         chan *Packet
 	maxSendingBytes    int
 	sendingBytes       int
@@ -60,18 +55,13 @@ func makeSession() *Session {
 	session := &Session{
 		Closer:             closer.NewCloser(),
 		Signaler:           NewSignaler(),
-		newConnIn:          make(chan net.Conn),
 		newConn:            make(chan net.Conn),
-		errConnIn:          make(chan net.Conn),
 		errConn:            make(chan net.Conn),
-		incomingPacketsIn:  make(chan *Packet),
 		incomingPackets:    make(chan *Packet),
-		incomingAcksIn:     make(chan uint32),
 		incomingAcks:       make(chan uint32),
 		getConnsLen:        make(chan int),
 		sendingPacketsMap:  make(map[uint32]*Packet),
 		sendingPacketsList: list.New(),
-		outPacketsIn:       make(chan *Packet),
 		outPackets:         make(chan *Packet),
 		maxSendingBytes:    4 * 1024,
 		outCheckTicker:     time.NewTicker(time.Millisecond * 100),
@@ -80,19 +70,9 @@ func makeSession() *Session {
 		Recv:               make(chan []byte),
 	}
 	heap.Init(session.incomingHeap)
-	l1 := ic.Link(session.newConnIn, session.newConn)
-	l2 := ic.Link(session.incomingPacketsIn, session.incomingPackets)
-	l3 := ic.Link(session.outPacketsIn, session.outPackets)
-	l4 := ic.Link(session.recvIn, session.Recv)
-	l5 := ic.Link(session.incomingAcksIn, session.incomingAcks)
-	l6 := ic.Link(session.errConnIn, session.errConn)
+	recvLink := ic.Link(session.recvIn, session.Recv)
 	session.OnClose(func() {
-		close(l1)
-		close(l2)
-		close(l3)
-		close(l4)
-		close(l5)
-		close(l6)
+		close(recvLink)
 	})
 	go session.start()
 	return session
@@ -183,7 +163,7 @@ func (s *Session) addConn(conn net.Conn) {
 				if err != nil || n != int(length) {
 					goto error_occur
 				}
-				s.incomingPacketsIn <- &Packet{
+				s.incomingPackets <- &Packet{
 					serial: serial,
 					data:   data,
 				}
@@ -192,13 +172,13 @@ func (s *Session) addConn(conn net.Conn) {
 				if err != nil {
 					goto error_occur
 				}
-				s.incomingAcksIn <- serial
+				s.incomingAcks <- serial
 			}
 		}
 		return
 	error_occur:
 		if !s.IsClosing { // conn error
-			s.errConnIn <- conn
+			s.errConn <- conn
 		}
 		return
 	}()
@@ -224,7 +204,7 @@ func (s *Session) delConn(conn net.Conn) {
 
 func (s *Session) Send(data []byte) {
 	packet := s.newPacket(data)
-	s.outPacketsIn <- packet
+	s.outPackets <- packet
 }
 
 func (s *Session) handleNewOutPacket(packet *Packet) {
@@ -259,7 +239,7 @@ func (s *Session) sendPacket(packet *Packet) {
 	n, err := conn.Write(buf.Bytes())
 	if err != nil || n != len(buf.Bytes()) {
 		if !s.IsClosing {
-			s.errConnIn <- conn
+			s.delConn(conn)
 			return
 		}
 	}
@@ -286,7 +266,7 @@ func (s *Session) sendAck(serial uint32) {
 	n, err := conn.Write(buf.Bytes())
 	if err != nil || n != len(buf.Bytes()) {
 		if !s.IsClosing {
-			s.errConnIn <- conn
+			s.delConn(conn)
 		}
 	}
 }

@@ -67,7 +67,7 @@ func NewServer(addrStr string) (*Server, error) {
 			case info := <-server.connSidChan:
 				session, ok := server.sessions[info.sessionId]
 				if ok { // existing session
-					session.newConnIn <- info.conn
+					session.newConn <- info.conn
 				} else { // new session
 					session := server.newSession(info.sessionId, info.conn)
 					server.sessions[info.sessionId] = session
@@ -106,6 +106,6 @@ func (s *Server) handleClient(conn net.Conn) {
 func (s *Server) newSession(sessionId uint64, conn net.Conn) *Session {
 	session := makeSession()
 	session.id = sessionId
-	session.newConnIn <- conn
+	session.newConn <- conn
 	return session
 }
