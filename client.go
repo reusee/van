@@ -12,24 +12,15 @@ type Client struct {
 }
 
 func NewClient(remoteAddr string) (*Client, error) {
-	// dial
-	conn, err := net.Dial("tcp", remoteAddr)
-	if err != nil {
-		return nil, err
-	}
-	// send session id
-	sessionId := uint64(rand.Int63())
-	err = binary.Write(conn, binary.LittleEndian, sessionId)
-	if err != nil {
-		return nil, err
-	}
-	// session
 	session := makeSession()
-	session.id = sessionId
-	session.newConnIn <- conn
+	session.id = uint64(rand.Int63())
 	client := &Client{
 		Session:    session,
 		remoteAddr: remoteAddr,
+	}
+	err := client.NewConn()
+	if err != nil {
+		return nil, err
 	}
 	return client, nil
 }
