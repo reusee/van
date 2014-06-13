@@ -5,6 +5,7 @@ import (
 	"container/heap"
 	"container/list"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math/rand"
 	"net"
@@ -22,7 +23,6 @@ const (
 type Session struct {
 	closer.Closer
 	*Signaler
-	*Logger
 
 	id    uint64
 	conns []net.Conn
@@ -60,7 +60,6 @@ func makeSession() *Session {
 	session := &Session{
 		Closer:             closer.NewCloser(),
 		Signaler:           NewSignaler(),
-		Logger:             newLogger(),
 		newConnIn:          make(chan net.Conn),
 		newConn:            make(chan net.Conn),
 		errConnIn:          make(chan net.Conn),
@@ -94,10 +93,13 @@ func makeSession() *Session {
 		close(l4)
 		close(l5)
 		close(l6)
-		session.Logger.Close()
 	})
 	go session.start()
 	return session
+}
+
+func (s *Session) Log(format string, args ...interface{}) {
+	s.Signal("Log", fmt.Sprintf(format, args...))
 }
 
 func (s *Session) start() {
