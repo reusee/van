@@ -82,8 +82,9 @@ func NewServer(addrStr string) (*Server, error) {
 
 func (s *Server) handleClient(conn net.Conn) {
 	var sessionId uint64
+	var err error
 	// read session id
-	err := conn.SetReadDeadline(time.Now().Add(time.Second * 4))
+	err = conn.SetReadDeadline(time.Now().Add(time.Second * 4))
 	if err != nil {
 		return
 	}
@@ -91,6 +92,7 @@ func (s *Server) handleClient(conn net.Conn) {
 	if err != nil {
 		return
 	}
+	conn.SetReadDeadline(time.Time{})
 	// send to session manager
 	select {
 	case s.connSidChan <- connSidInfo{

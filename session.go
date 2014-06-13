@@ -29,6 +29,7 @@ type Session struct {
 
 	newConnIn chan net.Conn
 	newConn   chan net.Conn
+	errConnIn chan net.Conn
 	errConn   chan net.Conn
 
 	incomingPacketsIn chan *Packet
@@ -44,8 +45,8 @@ type Session struct {
 	sendingPacketsList *list.List
 	outPacketsIn       chan *Packet
 	outPackets         chan *Packet
-	maxInflight        int
-	inflight           int
+	maxSendingBytes    int
+	sendingBytes       int
 	outCheckTicker     *time.Ticker
 
 	incomingHeap *Heap
@@ -62,6 +63,8 @@ func makeSession() *Session {
 		Logger:             newLogger(),
 		newConnIn:          make(chan net.Conn),
 		newConn:            make(chan net.Conn),
+		errConnIn:          make(chan net.Conn),
+		errConn:            make(chan net.Conn),
 		incomingPacketsIn:  make(chan *Packet),
 		incomingPackets:    make(chan *Packet),
 		incomingAcksIn:     make(chan uint32),
@@ -71,7 +74,7 @@ func makeSession() *Session {
 		sendingPacketsList: list.New(),
 		outPacketsIn:       make(chan *Packet),
 		outPackets:         make(chan *Packet),
-		maxInflight:        2 * 1024 * 1024,
+		maxSendingBytes:    4 * 1024,
 		outCheckTicker:     time.NewTicker(time.Millisecond * 100),
 		incomingHeap:       new(Heap),
 		recvIn:             make(chan []byte),
@@ -83,12 +86,14 @@ func makeSession() *Session {
 	l3 := ic.Link(session.outPacketsIn, session.outPackets)
 	l4 := ic.Link(session.recvIn, session.Recv)
 	l5 := ic.Link(session.incomingAcksIn, session.incomingAcks)
+	l6 := ic.Link(session.errConnIn, session.errConn)
 	session.OnClose(func() {
 		close(l1)
 		close(l2)
 		close(l3)
 		close(l4)
 		close(l5)
+		close(l6)
 		session.Logger.Close()
 	})
 	go session.start()
@@ -97,21 +102,22 @@ func makeSession() *Session {
 
 func (s *Session) start() {
 	for {
-		if s.maxInflight-s.inflight < 1024 { // inflight overflow
-			s.Log("inflight overflow waiting %d acks", len(s.sendingPacketsMap))
+		s.Log("Select")
+		if s.maxSendingBytes-s.sendingBytes < 1024 { // buffer full
+			s.Log("buffer full waiting %d acks", len(s.sendingPacketsMap))
 			select {
 			case <-s.WaitClosing: // exit
-				return
+				goto clear
 			case conn := <-s.newConn: // new connection
 				s.addConn(conn)
+			case conn := <-s.errConn: // conn error
+				s.delConn(conn)
 			case packet := <-s.incomingPackets: // incoming packet
 				s.handleIncomingPacket(packet)
 				s.sendAck(packet.serial)
 			case ackSerial := <-s.incomingAcks: // incoming acks
-				s.Log("ack %d", ackSerial)
 				s.handleIncomingAck(ackSerial)
 			case <-s.outCheckTicker.C: // check outgoing packet peroidly
-				s.Log("check and send")
 				s.checkSendingPackets()
 			// getters
 			case s.getConnsLen <- len(s.conns):
@@ -119,42 +125,43 @@ func (s *Session) start() {
 		} else {
 			select {
 			case <-s.WaitClosing: // exit
-				return
+				goto clear
 			case conn := <-s.newConn: // new connection
 				s.addConn(conn)
+			case conn := <-s.errConn: // conn error
+				s.delConn(conn)
 			case packet := <-s.incomingPackets: // incoming packet
 				s.handleIncomingPacket(packet)
 				s.sendAck(packet.serial)
 			case ackSerial := <-s.incomingAcks: // incoming acks
-				s.Log("ack %d", ackSerial)
 				s.handleIncomingAck(ackSerial)
 			case packet := <-s.outPackets: // outgoing packet
 				s.handleNewOutPacket(packet)
 			case <-s.outCheckTicker.C: // check outgoing packet peroidly
-				s.Log("check and send")
 				s.checkSendingPackets()
 			// getters
 			case s.getConnsLen <- len(s.conns):
 			}
 		}
 	}
+clear:
+	for _, c := range s.conns {
+		c.Close()
+	}
 }
 
 func (s *Session) addConn(conn net.Conn) {
 	s.conns = append(s.conns, conn)
 	s.Signal("NewConn")
-	// close conn when session close
-	s.OnClose(func() {
-		conn.Close()
-	})
 	// start reader
+	var err error
 	go func() {
 		var serial uint32
 		var length uint16
 		var packetType byte
 		for {
 			// read packet type
-			err := binary.Read(conn, binary.LittleEndian, &packetType)
+			err = binary.Read(conn, binary.LittleEndian, &packetType)
 			if err != nil {
 				goto error_occur
 			}
@@ -188,13 +195,29 @@ func (s *Session) addConn(conn net.Conn) {
 		}
 		return
 	error_occur:
-		if s.IsClosing { // session is closing
-			return
-		} else { // conn error
-			s.errConn <- conn
-			return
+		if !s.IsClosing { // conn error
+			s.errConnIn <- conn
 		}
+		return
 	}()
+}
+
+func (s *Session) delConn(conn net.Conn) {
+	s.Log("conn error")
+	index := -1
+	for i, c := range s.conns {
+		if c == conn {
+			index = i
+			break
+		}
+	}
+	if index > 0 { // delete
+		s.conns[index].Close()
+		s.conns = append(s.conns[:index], s.conns[index+1:]...)
+	}
+	if len(s.conns) == 0 {
+		panic("No conns. fixme") //TODO
+	}
 }
 
 func (s *Session) Send(data []byte) {
@@ -205,18 +228,19 @@ func (s *Session) Send(data []byte) {
 func (s *Session) handleNewOutPacket(packet *Packet) {
 	s.sendingPacketsMap[packet.serial] = packet
 	s.sendingPacketsList.PushBack(packet)
+	s.sendingBytes += len(packet.data)
 	s.sendPacket(packet)
 }
 
 func (s *Session) checkSendingPackets() {
-	now := time.Now()
 	s.Log("checking %d packets", len(s.sendingPacketsMap))
-	for _, packet := range s.sendingPacketsMap {
-		// check timeout
-		if packet.resendTimeout > 0 && now.Sub(packet.sentTime) < packet.resendTimeout {
-			continue
+	now := time.Now()
+	for e := s.sendingPacketsList.Front(); e != nil; e = e.Next() {
+		packet := e.Value.(*Packet)
+		if packet.resendTimeout > 0 && packet.sentTime.Add(packet.resendTimeout).After(now) {
+			s.Log("resend %d", packet.serial)
+			s.sendPacket(packet)
 		}
-		s.sendPacket(packet)
 	}
 }
 
@@ -232,19 +256,15 @@ func (s *Session) sendPacket(packet *Packet) {
 	// write to conn
 	n, err := conn.Write(buf.Bytes())
 	if err != nil || n != len(buf.Bytes()) {
-		if s.IsClosing {
-			return
-		} else {
-			s.errConn <- conn
+		if !s.IsClosing {
+			s.errConnIn <- conn
 			return
 		}
 	}
-	// set inflight
-	s.inflight += len(packet.data)
 	// set packet
 	packet.sentTime = time.Now()
 	if packet.resendTimeout == 0 { // newly created packet
-		packet.resendTimeout = time.Millisecond * 2000 // first resend timeout
+		packet.resendTimeout = time.Millisecond * 1000 // first resend timeout
 	} else {
 		packet.resendTimeout *= 2
 		// stat
@@ -253,6 +273,7 @@ func (s *Session) sendPacket(packet *Packet) {
 }
 
 func (s *Session) sendAck(serial uint32) {
+	s.Log("send ack %d", serial)
 	// pack
 	buf := new(bytes.Buffer)
 	buf.WriteByte(ACK)
@@ -262,16 +283,14 @@ func (s *Session) sendAck(serial uint32) {
 	// write to conn
 	n, err := conn.Write(buf.Bytes())
 	if err != nil || n != len(buf.Bytes()) {
-		if s.IsClosing {
-			return
-		} else {
-			s.errConn <- conn
-			return
+		if !s.IsClosing {
+			s.errConnIn <- conn
 		}
 	}
 }
 
 func (s *Session) handleIncomingPacket(packet *Packet) {
+	s.Log("incoming data %d", packet.serial)
 	if packet.serial == s.ackSerial { // in order
 		s.Log("in order %d", packet.serial)
 		s.recvIn <- packet.data
@@ -300,6 +319,7 @@ func (s *Session) handleIncomingPacket(packet *Packet) {
 }
 
 func (s *Session) handleIncomingAck(ackSerial uint32) {
+	s.Log("incoming ack %d", ackSerial)
 	if packet, ok := s.sendingPacketsMap[ackSerial]; ok {
 		packet.acked = true
 		delete(s.sendingPacketsMap, ackSerial)
@@ -308,8 +328,7 @@ func (s *Session) handleIncomingAck(ackSerial uint32) {
 	for e != nil {
 		packet := e.Value.(*Packet)
 		if packet.acked {
-			s.Log("inflight reduce %d", len(packet.data))
-			s.inflight -= len(packet.data)
+			s.sendingBytes -= len(packet.data)
 			cur := e
 			e = e.Next()
 			s.sendingPacketsList.Remove(cur)

@@ -15,7 +15,7 @@ func TestSend(t *testing.T) {
 	}
 	defer server.Close()
 
-	n := 50000
+	n := 100000
 	serverDone := make(chan bool)
 
 	go func() {
@@ -31,7 +31,7 @@ func TestSend(t *testing.T) {
 					if string(data) != fmt.Sprintf("%d", i) {
 						t.Fatalf("Recv")
 					}
-					fmt.Printf("=============================> %s\n", data)
+					fmt.Printf("from client %s\n", data)
 					i++
 					if i == n {
 						close(serverDone)
