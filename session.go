@@ -64,7 +64,7 @@ func makeSession() *Session {
 		sendingPacketsMap:  make(map[uint32]*Packet),
 		sendingPacketsList: list.New(),
 		outPackets:         make(chan *Packet),
-		maxSendingBytes:    16 * 1024,
+		maxSendingBytes:    8 * 1024,
 		outCheckTicker:     time.NewTicker(time.Millisecond * 100),
 		incomingHeap:       new(Heap),
 		recvIn:             make(chan []byte),
@@ -227,7 +227,7 @@ func (s *Session) checkSendingPackets() {
 	now := time.Now()
 	for e := s.sendingPacketsList.Front(); e != nil; e = e.Next() {
 		packet := e.Value.(*Packet)
-		if packet.resendTimeout > 0 && packet.sentTime.Add(packet.resendTimeout).After(now) {
+		if packet.resendTimeout == 0 || packet.resendTimeout > 0 && packet.sentTime.Add(packet.resendTimeout).After(now) {
 			s.Log("resend %d", packet.serial)
 			s.sendPacket(packet)
 		}
