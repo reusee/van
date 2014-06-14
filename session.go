@@ -51,6 +51,8 @@ type Session struct {
 	// getters
 	getConnsLen   chan int
 	getStatResend chan int
+	// setters
+	SetMaxSendingBytes chan int
 }
 
 func makeSession() *Session {
@@ -71,6 +73,7 @@ func makeSession() *Session {
 		Recv:               make(chan []byte),
 		getConnsLen:        make(chan int),
 		getStatResend:      make(chan int),
+		SetMaxSendingBytes: make(chan int),
 	}
 	heap.Init(session.incomingHeap)
 	recvLink := ic.Link(session.recvIn, session.Recv)
@@ -108,6 +111,9 @@ func (s *Session) start() {
 			// getters
 			case s.getConnsLen <- len(s.conns):
 			case s.getStatResend <- s.statResend:
+			// setters
+			case n := <-s.SetMaxSendingBytes:
+				s.maxSendingBytes = n
 			}
 		} else {
 			select {
@@ -129,6 +135,9 @@ func (s *Session) start() {
 			// getters
 			case s.getConnsLen <- len(s.conns):
 			case s.getStatResend <- s.statResend:
+			// setters
+			case n := <-s.SetMaxSendingBytes:
+				s.maxSendingBytes = n
 			}
 		}
 	}
