@@ -15,7 +15,7 @@ func TestSend(t *testing.T) {
 	}
 	defer server.Close()
 
-	n := 2048
+	n := 30000
 	serverDone := make(chan bool)
 
 	go func() {

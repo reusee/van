@@ -16,6 +16,7 @@ func TestInterrupt(t *testing.T) {
 	}
 	defer server.Close()
 
+	done := make(chan bool)
 	go func() {
 		for session := range server.NewSession {
 			go func() {
@@ -24,8 +25,14 @@ func TestInterrupt(t *testing.T) {
 						fmt.Printf("SERVER: %s\n", arg.(string))
 					})
 				*/
+				n := 0
 				for data := range session.Recv {
 					fmt.Printf("=====================> %s\n", data)
+					n++
+					if n > 50000 {
+						close(done)
+						return
+					}
 				}
 			}()
 		}
@@ -61,7 +68,11 @@ func TestInterrupt(t *testing.T) {
 		}
 	}()
 
-	for _ = range time.NewTicker(time.Second).C {
-		client.conns[rand.Intn(len(client.conns))].Close()
-	}
+	go func() {
+		for _ = range time.NewTicker(time.Second).C {
+			client.conns[rand.Intn(len(client.conns))].Close()
+		}
+	}()
+
+	<-done
 }

@@ -40,6 +40,8 @@ type Session struct {
 	outPackets         chan *Packet
 	maxSendingBytes    int
 	sendingBytes       int
+	maxSendingPackets  int
+	sendingPackets     int
 	outCheckTicker     *time.Ticker
 
 	incomingHeap *Heap
@@ -52,28 +54,31 @@ type Session struct {
 	getConnsLen   chan int
 	getStatResend chan int
 	// setters
-	SetMaxSendingBytes chan int
+	SetMaxSendingBytes   chan int
+	SetMaxSendingPackets chan int
 }
 
 func makeSession() *Session {
 	session := &Session{
-		Closer:             closer.NewCloser(),
-		Signaler:           NewSignaler(),
-		newConn:            make(chan net.Conn, 128),
-		errConn:            make(chan net.Conn),
-		incomingPackets:    make(chan *Packet),
-		incomingAcks:       make(chan uint32),
-		sendingPacketsMap:  make(map[uint32]*Packet),
-		sendingPacketsList: list.New(),
-		outPackets:         make(chan *Packet),
-		maxSendingBytes:    8 * 1024,
-		outCheckTicker:     time.NewTicker(time.Millisecond * 100),
-		incomingHeap:       new(Heap),
-		recvIn:             make(chan []byte),
-		Recv:               make(chan []byte),
-		getConnsLen:        make(chan int),
-		getStatResend:      make(chan int),
-		SetMaxSendingBytes: make(chan int),
+		Closer:               closer.NewCloser(),
+		Signaler:             NewSignaler(),
+		newConn:              make(chan net.Conn, 128),
+		errConn:              make(chan net.Conn),
+		incomingPackets:      make(chan *Packet),
+		incomingAcks:         make(chan uint32),
+		sendingPacketsMap:    make(map[uint32]*Packet),
+		sendingPacketsList:   list.New(),
+		outPackets:           make(chan *Packet),
+		maxSendingBytes:      8 * 1024,
+		maxSendingPackets:    128,
+		outCheckTicker:       time.NewTicker(time.Millisecond * 100),
+		incomingHeap:         new(Heap),
+		recvIn:               make(chan []byte),
+		Recv:                 make(chan []byte),
+		getConnsLen:          make(chan int),
+		getStatResend:        make(chan int),
+		SetMaxSendingBytes:   make(chan int),
+		SetMaxSendingPackets: make(chan int),
 	}
 	heap.Init(session.incomingHeap)
 	recvLink := ic.Link(session.recvIn, session.Recv)
@@ -92,7 +97,7 @@ func (s *Session) Log(format string, args ...interface{}) {
 func (s *Session) start() {
 	for {
 		s.Log("Select")
-		if s.maxSendingBytes-s.sendingBytes < 1024 { // buffer full
+		if s.sendingBytes > s.maxSendingBytes || s.sendingPackets > s.maxSendingPackets { // sending limit
 			s.Log("buffer full waiting %d acks", len(s.sendingPacketsMap))
 			select {
 			case <-s.WaitClosing: // exit
@@ -114,6 +119,8 @@ func (s *Session) start() {
 			// setters
 			case n := <-s.SetMaxSendingBytes:
 				s.maxSendingBytes = n
+			case n := <-s.SetMaxSendingPackets:
+				s.maxSendingPackets = n
 			}
 		} else {
 			select {
@@ -138,6 +145,8 @@ func (s *Session) start() {
 			// setters
 			case n := <-s.SetMaxSendingBytes:
 				s.maxSendingBytes = n
+			case n := <-s.SetMaxSendingPackets:
+				s.maxSendingPackets = n
 			}
 		}
 	}
@@ -228,6 +237,7 @@ func (s *Session) handleNewOutPacket(packet *Packet) {
 	s.sendingPacketsMap[packet.serial] = packet
 	s.sendingPacketsList.PushBack(packet)
 	s.sendingBytes += len(packet.data)
+	s.sendingPackets++
 	s.sendPacket(packet)
 }
 
@@ -328,6 +338,7 @@ func (s *Session) handleIncomingAck(ackSerial uint32) {
 		packet := e.Value.(*Packet)
 		if packet.acked {
 			s.sendingBytes -= len(packet.data)
+			s.sendingPackets--
 			cur := e
 			e = e.Next()
 			s.sendingPacketsList.Remove(cur)
