@@ -27,9 +27,11 @@ func TestInterrupt(t *testing.T) {
 				*/
 				n := 0
 				for data := range session.Recv {
-					fmt.Printf("=====================> %s\n", data)
+					if n%1000 == 0 {
+						fmt.Printf("=====================> %s\n", data)
+					}
 					n++
-					if n > 50000 {
+					if n > 30000 {
 						close(done)
 						return
 					}
@@ -47,7 +49,9 @@ func TestInterrupt(t *testing.T) {
 			fmt.Printf("CLIENT: %s\n", arg.(string))
 		})
 	*/
-	client.OnSignal("DelConn", func() {
+	client.OnSignal("DelConn", func(arg interface{}) {
+		nConns := arg.(int)
+		fmt.Printf("current conns %d\n", nConns)
 		err = client.NewConn()
 		if err != nil {
 			t.Fatalf("NewConn %v", err)
@@ -69,8 +73,8 @@ func TestInterrupt(t *testing.T) {
 	}()
 
 	go func() {
-		for _ = range time.NewTicker(time.Second).C {
-			client.conns[rand.Intn(len(client.conns))].Close()
+		for _ = range time.NewTicker(time.Millisecond * 200).C {
+			client.CloseRandomConn()
 		}
 	}()
 

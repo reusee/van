@@ -158,7 +158,7 @@ clear:
 
 func (s *Session) addConn(conn net.Conn) {
 	s.conns = append(s.conns, conn)
-	s.Signal("NewConn")
+	s.Signal("NewConn", len(s.conns))
 	// start reader
 	var err error
 	go func() {
@@ -220,7 +220,7 @@ func (s *Session) delConn(conn net.Conn) {
 	if index > 0 { // delete
 		s.Log("delete conn")
 		s.conns[index].Close()
-		s.Signal("DelConn")
+		s.Signal("DelConn", len(s.conns))
 		s.conns = append(s.conns[:index], s.conns[index+1:]...)
 	}
 	if len(s.conns) == 0 {

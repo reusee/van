@@ -4,11 +4,13 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"net"
+	"sync"
 )
 
 type Client struct {
 	*Session
 	remoteAddr string
+	lock       sync.Mutex
 }
 
 func NewClient(remoteAddr string) (*Client, error) {
@@ -38,4 +40,12 @@ func (c *Client) NewConn() error {
 	}
 	c.newConn <- conn
 	return nil
+}
+
+func (c *Client) CloseRandomConn() {
+	c.lock.Lock()
+	if len(c.conns) > 1 {
+		c.conns[rand.Intn(len(c.conns))].Close()
+	}
+	c.lock.Unlock()
 }
