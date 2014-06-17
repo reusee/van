@@ -123,10 +123,10 @@ func (s *Session) start() {
 		s.checkSendingPackets()
 	}, nil)
 	// getters
-	selector.Add(s.getConnsLen, nil, func() int {
+	selector.Add(s.getConnsLen, nil, func() interface{} {
 		return len(s.conns)
 	})
-	selector.Add(s.getStatResend, nil, func() int {
+	selector.Add(s.getStatResend, nil, func() interface{} {
 		return s.statResend
 	})
 	// setters
