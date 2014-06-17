@@ -13,6 +13,7 @@ import (
 
 	"github.com/reusee/closer"
 	ic "github.com/reusee/inf-chan"
+	se "github.com/reusee/selector"
 )
 
 const (
@@ -56,6 +57,8 @@ type Session struct {
 	// setters
 	SetMaxSendingBytes   chan int
 	SetMaxSendingPackets chan int
+
+	outPacketCase *se.Case
 }
 
 func makeSession() *Session {
@@ -95,62 +98,50 @@ func (s *Session) Log(format string, args ...interface{}) {
 }
 
 func (s *Session) start() {
-	for {
-		s.Log("Select")
-		if s.sendingBytes > s.maxSendingBytes || s.sendingPackets > s.maxSendingPackets { // sending limit
-			s.Log("buffer full waiting %d acks", len(s.sendingPacketsMap))
-			select {
-			case <-s.WaitClosing: // exit
-				goto clear
-			case conn := <-s.newConn: // new connection
-				s.addConn(conn)
-			case conn := <-s.errConn: // conn error
-				s.delConn(conn)
-			case packet := <-s.incomingPackets: // incoming packet
-				s.handleIncomingPacket(packet)
-				s.sendAck(packet.serial)
-			case ackSerial := <-s.incomingAcks: // incoming acks
-				s.handleIncomingAck(ackSerial)
-			case <-s.outCheckTicker.C: // check outgoing packet peroidly
-				s.checkSendingPackets()
-			// getters
-			case s.getConnsLen <- len(s.conns):
-			case s.getStatResend <- s.statResend:
-			// setters
-			case n := <-s.SetMaxSendingBytes:
-				s.maxSendingBytes = n
-			case n := <-s.SetMaxSendingPackets:
-				s.maxSendingPackets = n
-			}
-		} else {
-			select {
-			case <-s.WaitClosing: // exit
-				goto clear
-			case conn := <-s.newConn: // new connection
-				s.addConn(conn)
-			case conn := <-s.errConn: // conn error
-				s.delConn(conn)
-			case packet := <-s.incomingPackets: // incoming packet
-				s.handleIncomingPacket(packet)
-				s.sendAck(packet.serial)
-			case ackSerial := <-s.incomingAcks: // incoming acks
-				s.handleIncomingAck(ackSerial)
-			case packet := <-s.outPackets: // outgoing packet
-				s.handleNewOutPacket(packet)
-			case <-s.outCheckTicker.C: // check outgoing packet peroidly
-				s.checkSendingPackets()
-			// getters
-			case s.getConnsLen <- len(s.conns):
-			case s.getStatResend <- s.statResend:
-			// setters
-			case n := <-s.SetMaxSendingBytes:
-				s.maxSendingBytes = n
-			case n := <-s.SetMaxSendingPackets:
-				s.maxSendingPackets = n
-			}
-		}
+	var closing bool
+	selector := se.New()
+	selector.Add(s.WaitClosing, func() {
+		closing = true
+	}, nil)
+	selector.Add(s.newConn, func(recv interface{}) {
+		s.addConn(recv.(net.Conn))
+	}, nil)
+	selector.Add(s.errConn, func(recv interface{}) {
+		s.delConn(recv.(net.Conn))
+	}, nil)
+	selector.Add(s.incomingPackets, func(recv interface{}) {
+		s.handleIncomingPacket(recv.(*Packet))
+		s.sendAck(recv.(*Packet).serial)
+	}, nil)
+	selector.Add(s.incomingAcks, func(recv interface{}) {
+		s.handleIncomingAck(recv.(uint32))
+	}, nil)
+	s.outPacketCase = selector.Add(s.outPackets, func(recv interface{}) {
+		s.handleNewOutPacket(recv.(*Packet))
+	}, nil)
+	selector.Add(s.outCheckTicker.C, func() {
+		s.checkSendingPackets()
+	}, nil)
+	// getters
+	selector.Add(s.getConnsLen, nil, func() int {
+		return len(s.conns)
+	})
+	selector.Add(s.getStatResend, nil, func() int {
+		return s.statResend
+	})
+	// setters
+	selector.Add(s.SetMaxSendingBytes, func(recv interface{}) {
+		s.maxSendingBytes = recv.(int)
+	}, nil)
+	selector.Add(s.SetMaxSendingPackets, func(recv interface{}) {
+		s.maxSendingPackets = recv.(int)
+	}, nil)
+
+	for !closing {
+		selector.Select()
 	}
-clear:
+
+	//clear:
 	for _, c := range s.conns {
 		c.Close()
 	}
@@ -238,6 +229,9 @@ func (s *Session) handleNewOutPacket(packet *Packet) {
 	s.sendingPacketsList.PushBack(packet)
 	s.sendingBytes += len(packet.data)
 	s.sendingPackets++
+	if s.sendingPackets >= s.maxSendingPackets || s.sendingBytes >= s.maxSendingBytes {
+		s.outPacketCase.Disable()
+	}
 	s.sendPacket(packet)
 }
 
@@ -339,6 +333,9 @@ func (s *Session) handleIncomingAck(ackSerial uint32) {
 		if packet.acked {
 			s.sendingBytes -= len(packet.data)
 			s.sendingPackets--
+			if s.sendingBytes < s.maxSendingBytes && s.sendingPackets < s.maxSendingPackets {
+				s.outPacketCase.Enable()
+			}
 			cur := e
 			e = e.Next()
 			s.sendingPacketsList.Remove(cur)
