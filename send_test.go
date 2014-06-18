@@ -3,6 +3,7 @@ package van
 import (
 	"fmt"
 	"math/rand"
+	"strconv"
 	"testing"
 )
 
@@ -54,7 +55,11 @@ func TestSend(t *testing.T) {
 	}
 
 	for i := 0; i < n; i++ {
-		client.Send([]byte(fmt.Sprintf("%d", i)))
+		serial := client.Send([]byte(fmt.Sprintf("%d", i)))
+		client.OnSignal("Ack "+strconv.Itoa(int(serial)), func() bool {
+			fmt.Printf("CLIENT: Ack %d\n", serial)
+			return true
+		})
 	}
 
 	<-serverDone

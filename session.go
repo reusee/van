@@ -9,11 +9,13 @@ import (
 	"io"
 	"math/rand"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/reusee/closer"
 	ic "github.com/reusee/inf-chan"
 	se "github.com/reusee/selector"
+	"github.com/reusee/signaler"
 )
 
 const (
@@ -23,7 +25,7 @@ const (
 
 type Session struct {
 	closer.Closer
-	*Signaler
+	*signaler.Signaler
 
 	id    uint64
 	conns []net.Conn
@@ -64,7 +66,7 @@ type Session struct {
 func makeSession() *Session {
 	session := &Session{
 		Closer:               closer.NewCloser(),
-		Signaler:             NewSignaler(),
+		Signaler:             signaler.NewSignaler(),
 		newConn:              make(chan net.Conn, 128),
 		errConn:              make(chan net.Conn),
 		incomingPackets:      make(chan *Packet),
@@ -219,9 +221,10 @@ func (s *Session) delConn(conn net.Conn) {
 	}
 }
 
-func (s *Session) Send(data []byte) {
+func (s *Session) Send(data []byte) uint32 {
 	packet := s.newPacket(data)
 	s.outPackets <- packet
+	return packet.serial
 }
 
 func (s *Session) handleNewOutPacket(packet *Packet) {
@@ -326,6 +329,7 @@ func (s *Session) handleIncomingAck(ackSerial uint32) {
 	if packet, ok := s.sendingPacketsMap[ackSerial]; ok {
 		packet.acked = true
 		delete(s.sendingPacketsMap, ackSerial)
+		s.Signal("Ack " + strconv.Itoa(int(packet.serial)))
 	}
 	e := s.sendingPacketsList.Front()
 	for e != nil {
