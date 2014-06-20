@@ -8,8 +8,9 @@ type Packet struct {
 
 	index int // for heap
 
-	sentTime      time.Time
-	resendTimeout time.Duration
+	sentTime          time.Time
+	resendTimeout     time.Duration
+	baseResendTimeout time.Duration
 
 	acked bool
 }
