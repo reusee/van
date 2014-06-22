@@ -3,7 +3,8 @@ package van
 import "time"
 
 type Packet struct {
-	conn *Conn
+	conn   *Conn
+	connId int64
 
 	serial uint32
 	data   []byte
