@@ -13,7 +13,7 @@ import (
 type Server struct {
 	closer.Closer
 
-	sessions     map[uint64]*Session
+	sessions     map[int64]*Session
 	newTransport chan transportInfo
 
 	newSessionIn chan *Session
@@ -22,7 +22,7 @@ type Server struct {
 
 type transportInfo struct {
 	transport Transport
-	sessionId uint64
+	sessionId int64
 }
 
 func NewServer(addrStr string) (*Server, error) {
@@ -32,7 +32,7 @@ func NewServer(addrStr string) (*Server, error) {
 	}
 	server := &Server{
 		Closer:       closer.NewCloser(),
-		sessions:     make(map[uint64]*Session),
+		sessions:     make(map[int64]*Session),
 		newTransport: make(chan transportInfo),
 		newSessionIn: make(chan *Session),
 		NewSession:   make(chan *Session),
@@ -81,7 +81,7 @@ func NewServer(addrStr string) (*Server, error) {
 }
 
 func (s *Server) handleClient(transport Transport) {
-	var sessionId uint64
+	var sessionId int64
 	var err error
 	// read session id
 	err = transport.SetReadDeadline(time.Now().Add(time.Second * 4))
@@ -103,7 +103,7 @@ func (s *Server) handleClient(transport Transport) {
 	}
 }
 
-func (s *Server) newSession(sessionId uint64, transport Transport) *Session {
+func (s *Server) newSession(sessionId int64, transport Transport) *Session {
 	session := makeSession()
 	session.id = sessionId
 	session.newTransport <- transport

@@ -26,7 +26,7 @@ type Session struct {
 	closer.Closer
 	*signaler.Signaler
 
-	id         uint64
+	id         int64
 	transports []Transport
 
 	newTransport chan Transport

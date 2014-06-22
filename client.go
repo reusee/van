@@ -15,7 +15,7 @@ type Client struct {
 
 func NewClient(remoteAddr string) (*Client, error) {
 	session := makeSession()
-	session.id = uint64(rand.Int63())
+	session.id = rand.Int63()
 	client := &Client{
 		Session:    session,
 		remoteAddr: remoteAddr,
