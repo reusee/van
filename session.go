@@ -3,16 +3,15 @@ package van
 import (
 	"bytes"
 	"container/heap"
-	"container/list"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"math/rand"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/reusee/closer"
-	ic "github.com/reusee/inf-chan"
 	se "github.com/reusee/selector"
 	"github.com/reusee/signaler"
 )
@@ -28,25 +27,19 @@ type Session struct {
 
 	id         int64
 	transports []Transport
+	conns      map[int64]*Conn
+	connsLock  sync.Mutex
 
 	newTransport chan Transport
 	errTransport chan Transport
 
 	incomingPackets chan *Packet
-	incomingAcks    chan uint32
+	incomingAcks    chan *Packet
 
-	serial             uint32
-	ackSerial          uint32
-	sendingPacketsMap  map[uint32]*Packet
-	sendingPacketsList *list.List
-	outPackets         chan *Packet
-	maxSendingPackets  int
-	sendingPackets     int
-	outCheckTicker     *time.Ticker
-
-	incomingHeap *Heap
-	recvIn       chan []byte
-	Recv         chan []byte
+	outgoingPackets   chan *Packet
+	outCheckTicker    *time.Ticker
+	maxSendingPackets int
+	sendingPackets    int
 
 	statResend int
 
@@ -61,28 +54,20 @@ type Session struct {
 
 func makeSession() *Session {
 	session := &Session{
-		Closer:               closer.NewCloser(),
-		Signaler:             signaler.NewSignaler(),
-		newTransport:         make(chan Transport, 128),
-		errTransport:         make(chan Transport),
-		incomingPackets:      make(chan *Packet),
-		incomingAcks:         make(chan uint32),
-		sendingPacketsMap:    make(map[uint32]*Packet),
-		sendingPacketsList:   list.New(),
-		outPackets:           make(chan *Packet),
-		maxSendingPackets:    1024,
-		outCheckTicker:       time.NewTicker(time.Millisecond * 100),
-		incomingHeap:         new(Heap),
-		recvIn:               make(chan []byte),
-		Recv:                 make(chan []byte),
-		getTransportCount:    make(chan int),
-		getStatResend:        make(chan int),
-		SetMaxSendingPackets: make(chan int),
+		Closer:            closer.NewCloser(),
+		Signaler:          signaler.NewSignaler(),
+		conns:             make(map[int64]*Conn),
+		newTransport:      make(chan Transport, 128),
+		errTransport:      make(chan Transport),
+		incomingPackets:   make(chan *Packet),
+		incomingAcks:      make(chan *Packet),
+		outgoingPackets:   make(chan *Packet),
+		maxSendingPackets: 1024,
+		outCheckTicker:    time.NewTicker(time.Millisecond * 100),
+		getTransportCount: make(chan int),
+		getStatResend:     make(chan int),
 	}
-	heap.Init(session.incomingHeap)
-	recvLink := ic.Link(session.recvIn, session.Recv)
 	session.OnClose(func() {
-		close(recvLink)
 		session.CloseSignaler()
 	})
 	go session.start()
@@ -106,13 +91,14 @@ func (s *Session) start() {
 		s.removeTransport(recv.(Transport))
 	}, nil)
 	selector.Add(s.incomingPackets, func(recv interface{}) {
-		s.handleIncomingPacket(recv.(*Packet))
-		s.sendAck(recv.(*Packet).serial)
+		packet := recv.(*Packet)
+		s.handleIncomingPacket(packet)
+		s.sendAck(packet)
 	}, nil)
 	selector.Add(s.incomingAcks, func(recv interface{}) {
-		s.handleIncomingAck(recv.(uint32))
+		s.handleIncomingAck(recv.(*Packet))
 	}, nil)
-	s.outPacketCase = selector.Add(s.outPackets, func(recv interface{}) {
+	s.outPacketCase = selector.Add(s.outgoingPackets, func(recv interface{}) {
 		s.handleOutgoingPacket(recv.(*Packet))
 	}, nil)
 	selector.Add(s.outCheckTicker.C, func() {
@@ -130,6 +116,7 @@ func (s *Session) start() {
 		s.maxSendingPackets = recv.(int)
 	}, nil)
 
+	// main loop
 	for !closing {
 		selector.Select()
 	}
@@ -149,7 +136,27 @@ func (s *Session) addTransport(transport Transport) {
 		var serial uint32
 		var length uint16
 		var packetType byte
+		var connId int64
 		for {
+			// read conn id
+			err = binary.Read(transport, binary.LittleEndian, &connId)
+			if err != nil {
+				goto error_occur
+			}
+			// get or create conn
+			s.connsLock.Lock()
+			conn, ok := s.conns[connId]
+			if !ok { // create new conn
+				conn = s.makeConn()
+				conn.id = connId
+				s.conns[conn.id] = conn
+				conn.OnClose(func() {
+					delete(s.conns, conn.id)
+				})
+				s.Signal("NewConn", conn)
+				s.Log("NewConn from remote %d", conn.id)
+			}
+			s.connsLock.Unlock()
 			// read packet type
 			err = binary.Read(transport, binary.LittleEndian, &packetType)
 			if err != nil {
@@ -172,6 +179,7 @@ func (s *Session) addTransport(transport Transport) {
 					goto error_occur
 				}
 				s.incomingPackets <- &Packet{
+					conn:   conn,
 					serial: serial,
 					data:   data,
 				}
@@ -180,7 +188,10 @@ func (s *Session) addTransport(transport Transport) {
 				if err != nil {
 					goto error_occur
 				}
-				s.incomingAcks <- serial
+				s.incomingAcks <- &Packet{
+					conn:   conn,
+					serial: serial,
+				}
 			}
 		}
 		return
@@ -212,15 +223,19 @@ func (s *Session) removeTransport(transport Transport) {
 	}
 }
 
-func (s *Session) Send(data []byte) uint32 {
-	packet := s.newPacket(data)
-	s.outPackets <- packet
-	return packet.serial
+func (s *Session) NewConn() *Conn {
+	conn := s.makeConn()
+	conn.id = rand.Int63()
+	s.conns[conn.id] = conn
+	conn.OnClose(func() {
+		delete(s.conns, conn.id)
+	})
+	return conn
 }
 
 func (s *Session) handleOutgoingPacket(packet *Packet) {
-	s.sendingPacketsMap[packet.serial] = packet
-	s.sendingPacketsList.PushBack(packet)
+	packet.conn.sendingPacketsMap[packet.serial] = packet
+	packet.conn.sendingPacketsList.PushBack(packet)
 	s.sendingPackets++
 	if s.sendingPackets >= s.maxSendingPackets {
 		s.outPacketCase.Disable()
@@ -229,13 +244,15 @@ func (s *Session) handleOutgoingPacket(packet *Packet) {
 }
 
 func (s *Session) checkOutgoingPackets() {
-	s.Log("checking %d packets", len(s.sendingPacketsMap))
-	now := time.Now()
-	for e := s.sendingPacketsList.Front(); e != nil; e = e.Next() {
-		packet := e.Value.(*Packet)
-		if packet.resendTimeout == 0 || packet.resendTimeout > 0 && packet.sentTime.Add(packet.resendTimeout).After(now) {
-			s.Log("resend %d", packet.serial)
-			s.sendPacket(packet)
+	for _, conn := range s.conns {
+		s.Log("checking conn %d, %d packets", conn.id, len(conn.sendingPacketsMap))
+		now := time.Now()
+		for e := conn.sendingPacketsList.Front(); e != nil; e = e.Next() {
+			packet := e.Value.(*Packet)
+			if packet.resendTimeout == 0 || packet.resendTimeout > 0 && packet.sentTime.Add(packet.resendTimeout).After(now) {
+				s.Log("resend %d", packet.serial)
+				s.sendPacket(packet)
+			}
 		}
 	}
 }
@@ -243,6 +260,7 @@ func (s *Session) checkOutgoingPackets() {
 func (s *Session) sendPacket(packet *Packet) {
 	// pack packet
 	buf := new(bytes.Buffer)
+	binary.Write(buf, binary.LittleEndian, packet.conn.id)
 	buf.WriteByte(DATA)
 	binary.Write(buf, binary.LittleEndian, packet.serial)
 	binary.Write(buf, binary.LittleEndian, uint16(len(packet.data)))
@@ -270,12 +288,13 @@ func (s *Session) sendPacket(packet *Packet) {
 	}
 }
 
-func (s *Session) sendAck(serial uint32) {
-	s.Log("send ack %d", serial)
+func (s *Session) sendAck(packet *Packet) {
+	s.Log("send ack %d", packet.serial)
 	// pack
 	buf := new(bytes.Buffer)
+	binary.Write(buf, binary.LittleEndian, packet.conn.id)
 	buf.WriteByte(ACK)
-	binary.Write(buf, binary.LittleEndian, serial)
+	binary.Write(buf, binary.LittleEndian, packet.serial)
 	// select transport
 	transport := s.transports[rand.Intn(len(s.transports))]
 	// write to transport
@@ -289,41 +308,43 @@ func (s *Session) sendAck(serial uint32) {
 
 func (s *Session) handleIncomingPacket(packet *Packet) {
 	s.Log("incoming data %d", packet.serial)
-	if packet.serial == s.ackSerial { // in order
+	conn := packet.conn
+	if packet.serial == conn.ackSerial { // in order
 		s.Log("in order %d", packet.serial)
-		s.recvIn <- packet.data
-		s.ackSerial++
-	} else if packet.serial > s.ackSerial { // out of order
+		conn.recvIn <- packet.data
+		conn.ackSerial++
+	} else if packet.serial > conn.ackSerial { // out of order
 		s.Log("out of order %d", packet.serial)
-		heap.Push(s.incomingHeap, packet)
-	} else if packet.serial < s.ackSerial { // duplicated
+		heap.Push(conn.incomingHeap, packet)
+	} else if packet.serial < conn.ackSerial { // duplicated
 		s.Log("dup %d", packet.serial)
 	}
 	// try pop
-	for s.incomingHeap.Len() > 0 {
-		packet := heap.Pop(s.incomingHeap).(*Packet)
-		if packet.serial == s.ackSerial { // ready to provide
+	for conn.incomingHeap.Len() > 0 {
+		packet := heap.Pop(conn.incomingHeap).(*Packet)
+		if packet.serial == conn.ackSerial { // ready to provide
 			s.Log("provide %d", packet.serial)
-			s.recvIn <- packet.data
-			s.ackSerial++
-		} else if packet.serial < s.ackSerial { // duplicated
+			conn.recvIn <- packet.data
+			conn.ackSerial++
+		} else if packet.serial < conn.ackSerial { // duplicated
 			s.Log("dup %d", packet.serial)
-		} else if packet.serial > s.ackSerial { // not ready
+		} else if packet.serial > conn.ackSerial { // not ready
 			s.Log("not ready %d", packet.serial)
-			heap.Push(s.incomingHeap, packet)
+			heap.Push(conn.incomingHeap, packet)
 			break
 		}
 	}
 }
 
-func (s *Session) handleIncomingAck(ackSerial uint32) {
-	s.Log("incoming ack %d", ackSerial)
-	if packet, ok := s.sendingPacketsMap[ackSerial]; ok {
+func (s *Session) handleIncomingAck(packet *Packet) {
+	s.Log("incoming ack %d", packet.serial)
+	conn := packet.conn
+	if packet, ok := conn.sendingPacketsMap[packet.serial]; ok {
 		packet.acked = true
-		delete(s.sendingPacketsMap, ackSerial)
+		delete(conn.sendingPacketsMap, packet.serial)
 		s.Signal("Ack " + strconv.Itoa(int(packet.serial)))
 	}
-	e := s.sendingPacketsList.Front()
+	e := conn.sendingPacketsList.Front()
 	for e != nil {
 		packet := e.Value.(*Packet)
 		if packet.acked {
@@ -333,7 +354,7 @@ func (s *Session) handleIncomingAck(ackSerial uint32) {
 			}
 			cur := e
 			e = e.Next()
-			s.sendingPacketsList.Remove(cur)
+			conn.sendingPacketsList.Remove(cur)
 		} else {
 			break
 		}

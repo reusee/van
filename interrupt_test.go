@@ -25,17 +25,22 @@ func TestInterrupt(t *testing.T) {
 						fmt.Printf("SERVER: %s\n", arg.(string))
 					})
 				*/
-				n := 0
-				for data := range session.Recv {
-					if n%1000 == 0 {
-						fmt.Printf("=====================> %s\n", data)
-					}
-					n++
-					if n > 30000 {
-						close(done)
-						return
-					}
-				}
+				session.OnSignal("NewConn", func(arg interface{}) {
+					conn := arg.(*Conn)
+					go func() {
+						n := 0
+						for data := range conn.Recv {
+							if n%1000 == 0 {
+								fmt.Printf("=====================> %s\n", data)
+							}
+							n++
+							if n > 30000 {
+								close(done)
+								return
+							}
+						}
+					}()
+				})
 			}()
 		}
 	}()
@@ -64,10 +69,11 @@ func TestInterrupt(t *testing.T) {
 		}
 	}
 
+	conn := client.NewConn()
 	go func() {
 		i := 0
 		for {
-			client.Send([]byte(fmt.Sprintf("%d", i)))
+			conn.Send([]byte(fmt.Sprintf("%d", i)))
 			i++
 		}
 	}()

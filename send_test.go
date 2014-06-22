@@ -27,17 +27,22 @@ func TestSend(t *testing.T) {
 						fmt.Printf("SERVER: %s\n", arg.(string))
 					})
 				*/
-				i := 0
-				for data := range session.Recv {
-					if string(data) != fmt.Sprintf("%d", i) {
-						t.Fatalf("Recv")
-					}
-					fmt.Printf("from client %s\n", data)
-					i++
-					if i == n {
-						close(serverDone)
-					}
-				}
+				session.OnSignal("NewConn", func(arg interface{}) {
+					conn := arg.(*Conn)
+					go func() {
+						i := 0
+						for data := range conn.Recv {
+							if string(data) != fmt.Sprintf("%d", i) {
+								t.Fatalf("Recv")
+							}
+							fmt.Printf("from client %s\n", data)
+							i++
+							if i == n {
+								close(serverDone)
+							}
+						}
+					}()
+				})
 			}()
 		}
 	}()
@@ -58,8 +63,9 @@ func TestSend(t *testing.T) {
 		}
 	}
 
+	conn := client.NewConn()
 	for i := 0; i < n; i++ {
-		serial := client.Send([]byte(fmt.Sprintf("%d", i)))
+		serial := conn.Send([]byte(fmt.Sprintf("%d", i)))
 		client.OnSignal("Ack "+strconv.Itoa(int(serial)), func() bool {
 			fmt.Printf("CLIENT: Ack %d\n", serial)
 			return true

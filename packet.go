@@ -3,6 +3,8 @@ package van
 import "time"
 
 type Packet struct {
+	conn *Conn
+
 	serial uint32
 	data   []byte
 
@@ -15,11 +17,12 @@ type Packet struct {
 	acked bool
 }
 
-func (s *Session) newPacket(data []byte) *Packet {
+func (c *Conn) newPacket(data []byte) *Packet {
 	packet := &Packet{
-		serial: s.serial,
+		conn:   c,
+		serial: c.serial,
 		data:   data,
 	}
-	s.serial++
+	c.serial++
 	return packet
 }
