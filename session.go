@@ -54,7 +54,6 @@ type Session struct {
 	getTransportCount chan int
 	getStatResend     chan int
 	// setters
-	SetMaxSendingBytes   chan int
 	SetMaxSendingPackets chan int
 
 	outPacketCase *se.Case
@@ -78,7 +77,6 @@ func makeSession() *Session {
 		Recv:                 make(chan []byte),
 		getTransportCount:    make(chan int),
 		getStatResend:        make(chan int),
-		SetMaxSendingBytes:   make(chan int),
 		SetMaxSendingPackets: make(chan int),
 	}
 	heap.Init(session.incomingHeap)
