@@ -41,8 +41,6 @@ type Session struct {
 	sendingPacketsMap  map[uint32]*Packet
 	sendingPacketsList *list.List
 	outPackets         chan *Packet
-	maxSendingBytes    int
-	sendingBytes       int
 	maxSendingPackets  int
 	sendingPackets     int
 	outCheckTicker     *time.Ticker
@@ -74,8 +72,7 @@ func makeSession() *Session {
 		sendingPacketsMap:    make(map[uint32]*Packet),
 		sendingPacketsList:   list.New(),
 		outPackets:           make(chan *Packet),
-		maxSendingBytes:      8 * 1024,
-		maxSendingPackets:    128,
+		maxSendingPackets:    1024,
 		outCheckTicker:       time.NewTicker(time.Millisecond * 100),
 		incomingHeap:         new(Heap),
 		recvIn:               make(chan []byte),
@@ -132,9 +129,6 @@ func (s *Session) start() {
 		return s.statResend
 	})
 	// setters
-	selector.Add(s.SetMaxSendingBytes, func(recv interface{}) {
-		s.maxSendingBytes = recv.(int)
-	}, nil)
 	selector.Add(s.SetMaxSendingPackets, func(recv interface{}) {
 		s.maxSendingPackets = recv.(int)
 	}, nil)
@@ -230,9 +224,8 @@ func (s *Session) Send(data []byte) uint32 {
 func (s *Session) handleNewOutPacket(packet *Packet) {
 	s.sendingPacketsMap[packet.serial] = packet
 	s.sendingPacketsList.PushBack(packet)
-	s.sendingBytes += len(packet.data)
 	s.sendingPackets++
-	if s.sendingPackets >= s.maxSendingPackets || s.sendingBytes >= s.maxSendingBytes {
+	if s.sendingPackets >= s.maxSendingPackets {
 		s.outPacketCase.Disable()
 	}
 	s.sendPacket(packet)
@@ -337,9 +330,8 @@ func (s *Session) handleIncomingAck(ackSerial uint32) {
 	for e != nil {
 		packet := e.Value.(*Packet)
 		if packet.acked {
-			s.sendingBytes -= len(packet.data)
 			s.sendingPackets--
-			if s.sendingBytes < s.maxSendingBytes && s.sendingPackets < s.maxSendingPackets {
+			if s.sendingPackets < s.maxSendingPackets {
 				s.outPacketCase.Enable()
 			}
 			cur := e
