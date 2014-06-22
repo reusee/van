@@ -113,10 +113,10 @@ func (s *Session) start() {
 		s.handleIncomingAck(recv.(uint32))
 	}, nil)
 	s.outPacketCase = selector.Add(s.outPackets, func(recv interface{}) {
-		s.handleNewOutPacket(recv.(*Packet))
+		s.handleOutgoingPacket(recv.(*Packet))
 	}, nil)
 	selector.Add(s.outCheckTicker.C, func() {
-		s.checkSendingPackets()
+		s.checkOutgoingPackets()
 	}, nil)
 	// getters
 	selector.Add(s.getTransportCount, nil, func() interface{} {
@@ -218,7 +218,7 @@ func (s *Session) Send(data []byte) uint32 {
 	return packet.serial
 }
 
-func (s *Session) handleNewOutPacket(packet *Packet) {
+func (s *Session) handleOutgoingPacket(packet *Packet) {
 	s.sendingPacketsMap[packet.serial] = packet
 	s.sendingPacketsList.PushBack(packet)
 	s.sendingPackets++
@@ -228,7 +228,7 @@ func (s *Session) handleNewOutPacket(packet *Packet) {
 	s.sendPacket(packet)
 }
 
-func (s *Session) checkSendingPackets() {
+func (s *Session) checkOutgoingPackets() {
 	s.Log("checking %d packets", len(s.sendingPacketsMap))
 	now := time.Now()
 	for e := s.sendingPacketsList.Front(); e != nil; e = e.Next() {
