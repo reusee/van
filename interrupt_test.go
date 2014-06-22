@@ -49,18 +49,18 @@ func TestInterrupt(t *testing.T) {
 			fmt.Printf("CLIENT: %s\n", arg.(string))
 		})
 	*/
-	client.OnSignal("DelConn", func(arg interface{}) {
-		nConns := arg.(int)
-		fmt.Printf("current conns %d\n", nConns)
-		err = client.NewConn()
+	client.OnSignal("RemoveTransport", func(arg interface{}) {
+		transportCount := arg.(int)
+		fmt.Printf("current transports %d\n", transportCount)
+		err = client.NewTransport()
 		if err != nil {
-			t.Fatalf("NewConn %v", err)
+			t.Fatalf("NewTransport %v", err)
 		}
 	})
 	for i := 0; i < 16; i++ {
-		err = client.NewConn()
+		err = client.NewTransport()
 		if err != nil {
-			t.Fatalf("NewConn %v", err)
+			t.Fatalf("NewTransport %v", err)
 		}
 	}
 
@@ -74,7 +74,7 @@ func TestInterrupt(t *testing.T) {
 
 	go func() {
 		for _ = range time.NewTicker(time.Millisecond * 200).C {
-			client.CloseRandomConn()
+			client.CloseRandomTransport()
 		}
 	}()
 

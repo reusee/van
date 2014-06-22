@@ -13,15 +13,15 @@ import (
 type Server struct {
 	closer.Closer
 
-	sessions    map[uint64]*Session
-	connSidChan chan connSidInfo
+	sessions     map[uint64]*Session
+	newTransport chan transportInfo
 
 	newSessionIn chan *Session
 	NewSession   chan *Session
 }
 
-type connSidInfo struct {
-	conn      net.Conn
+type transportInfo struct {
+	transport Transport
 	sessionId uint64
 }
 
@@ -33,7 +33,7 @@ func NewServer(addrStr string) (*Server, error) {
 	server := &Server{
 		Closer:       closer.NewCloser(),
 		sessions:     make(map[uint64]*Session),
-		connSidChan:  make(chan connSidInfo),
+		newTransport: make(chan transportInfo),
 		newSessionIn: make(chan *Session),
 		NewSession:   make(chan *Session),
 	}
@@ -46,7 +46,7 @@ func NewServer(addrStr string) (*Server, error) {
 	// accept
 	go func() {
 		for {
-			conn, err := ln.Accept()
+			transport, err := ln.Accept()
 			if err != nil {
 				if server.IsClosing { // close normally
 					return
@@ -54,22 +54,22 @@ func NewServer(addrStr string) (*Server, error) {
 					log.Fatal(err)
 				}
 			}
-			go server.handleClient(conn)
+			go server.handleClient(transport)
 		}
 	}()
 
-	// conn / session manager
+	// transport / session manager
 	go func() {
 		for {
 			select {
 			case <-server.WaitClosing:
 				return
-			case info := <-server.connSidChan:
+			case info := <-server.newTransport:
 				session, ok := server.sessions[info.sessionId]
 				if ok { // existing session
-					session.newConn <- info.conn
+					session.newTransport <- info.transport
 				} else { // new session
-					session := server.newSession(info.sessionId, info.conn)
+					session := server.newSession(info.sessionId, info.transport)
 					server.sessions[info.sessionId] = session
 					server.newSessionIn <- session
 				}
@@ -80,32 +80,32 @@ func NewServer(addrStr string) (*Server, error) {
 	return server, nil
 }
 
-func (s *Server) handleClient(conn net.Conn) {
+func (s *Server) handleClient(transport Transport) {
 	var sessionId uint64
 	var err error
 	// read session id
-	err = conn.SetReadDeadline(time.Now().Add(time.Second * 4))
+	err = transport.SetReadDeadline(time.Now().Add(time.Second * 4))
 	if err != nil {
 		return
 	}
-	err = binary.Read(conn, binary.LittleEndian, &sessionId)
+	err = binary.Read(transport, binary.LittleEndian, &sessionId)
 	if err != nil {
 		return
 	}
-	conn.SetReadDeadline(time.Time{})
+	transport.SetReadDeadline(time.Time{})
 	// send to session manager
 	select {
-	case s.connSidChan <- connSidInfo{
-		conn:      conn,
+	case s.newTransport <- transportInfo{
+		transport: transport,
 		sessionId: sessionId,
 	}:
 	default:
 	}
 }
 
-func (s *Server) newSession(sessionId uint64, conn net.Conn) *Session {
+func (s *Server) newSession(sessionId uint64, transport Transport) *Session {
 	session := makeSession()
 	session.id = sessionId
-	session.newConn <- conn
+	session.newTransport <- transport
 	return session
 }

@@ -20,32 +20,32 @@ func NewClient(remoteAddr string) (*Client, error) {
 		Session:    session,
 		remoteAddr: remoteAddr,
 	}
-	err := client.NewConn()
+	err := client.NewTransport()
 	if err != nil {
 		return nil, err
 	}
 	return client, nil
 }
 
-func (c *Client) NewConn() error {
+func (c *Client) NewTransport() error {
 	// dial
-	conn, err := net.Dial("tcp", c.remoteAddr)
+	transport, err := net.Dial("tcp", c.remoteAddr)
 	if err != nil {
 		return err
 	}
 	// send session id
-	err = binary.Write(conn, binary.LittleEndian, c.id)
+	err = binary.Write(transport, binary.LittleEndian, c.id)
 	if err != nil {
 		return err
 	}
-	c.newConn <- conn
+	c.newTransport <- transport
 	return nil
 }
 
-func (c *Client) CloseRandomConn() {
+func (c *Client) CloseRandomTransport() {
 	c.lock.Lock()
-	if len(c.conns) > 1 {
-		c.conns[rand.Intn(len(c.conns))].Close()
+	if len(c.transports) > 1 {
+		c.transports[rand.Intn(len(c.transports))].Close()
 	}
 	c.lock.Unlock()
 }

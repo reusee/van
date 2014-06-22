@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
-	"net"
 	"strconv"
 	"time"
 
@@ -27,11 +26,11 @@ type Session struct {
 	closer.Closer
 	*signaler.Signaler
 
-	id    uint64
-	conns []net.Conn
+	id         uint64
+	transports []Transport
 
-	newConn chan net.Conn
-	errConn chan net.Conn
+	newTransport chan Transport
+	errTransport chan Transport
 
 	incomingPackets chan *Packet
 	incomingAcks    chan uint32
@@ -52,8 +51,8 @@ type Session struct {
 	statResend int
 
 	// getters
-	getConnsLen   chan int
-	getStatResend chan int
+	getTransportCount chan int
+	getStatResend     chan int
 	// setters
 	SetMaxSendingBytes   chan int
 	SetMaxSendingPackets chan int
@@ -65,8 +64,8 @@ func makeSession() *Session {
 	session := &Session{
 		Closer:               closer.NewCloser(),
 		Signaler:             signaler.NewSignaler(),
-		newConn:              make(chan net.Conn, 128),
-		errConn:              make(chan net.Conn),
+		newTransport:         make(chan Transport, 128),
+		errTransport:         make(chan Transport),
 		incomingPackets:      make(chan *Packet),
 		incomingAcks:         make(chan uint32),
 		sendingPacketsMap:    make(map[uint32]*Packet),
@@ -77,7 +76,7 @@ func makeSession() *Session {
 		incomingHeap:         new(Heap),
 		recvIn:               make(chan []byte),
 		Recv:                 make(chan []byte),
-		getConnsLen:          make(chan int),
+		getTransportCount:    make(chan int),
 		getStatResend:        make(chan int),
 		SetMaxSendingBytes:   make(chan int),
 		SetMaxSendingPackets: make(chan int),
@@ -102,11 +101,11 @@ func (s *Session) start() {
 	selector.Add(s.WaitClosing, func() {
 		closing = true
 	}, nil)
-	selector.Add(s.newConn, func(recv interface{}) {
-		s.addConn(recv.(net.Conn))
+	selector.Add(s.newTransport, func(recv interface{}) {
+		s.addTransport(recv.(Transport))
 	}, nil)
-	selector.Add(s.errConn, func(recv interface{}) {
-		s.delConn(recv.(net.Conn))
+	selector.Add(s.errTransport, func(recv interface{}) {
+		s.removeTransport(recv.(Transport))
 	}, nil)
 	selector.Add(s.incomingPackets, func(recv interface{}) {
 		s.handleIncomingPacket(recv.(*Packet))
@@ -122,8 +121,8 @@ func (s *Session) start() {
 		s.checkSendingPackets()
 	}, nil)
 	// getters
-	selector.Add(s.getConnsLen, nil, func() interface{} {
-		return len(s.conns)
+	selector.Add(s.getTransportCount, nil, func() interface{} {
+		return len(s.transports)
 	})
 	selector.Add(s.getStatResend, nil, func() interface{} {
 		return s.statResend
@@ -138,14 +137,14 @@ func (s *Session) start() {
 	}
 
 	//clear:
-	for _, c := range s.conns {
+	for _, c := range s.transports {
 		c.Close()
 	}
 }
 
-func (s *Session) addConn(conn net.Conn) {
-	s.conns = append(s.conns, conn)
-	s.Signal("NewConn", len(s.conns))
+func (s *Session) addTransport(transport Transport) {
+	s.transports = append(s.transports, transport)
+	s.Signal("NewTransport", len(s.transports))
 	// start reader
 	var err error
 	go func() {
@@ -154,23 +153,23 @@ func (s *Session) addConn(conn net.Conn) {
 		var packetType byte
 		for {
 			// read packet type
-			err = binary.Read(conn, binary.LittleEndian, &packetType)
+			err = binary.Read(transport, binary.LittleEndian, &packetType)
 			if err != nil {
 				goto error_occur
 			}
 			// data or ack
 			switch packetType {
 			case DATA: // data
-				err = binary.Read(conn, binary.LittleEndian, &serial)
+				err = binary.Read(transport, binary.LittleEndian, &serial)
 				if err != nil {
 					goto error_occur
 				}
-				err = binary.Read(conn, binary.LittleEndian, &length)
+				err = binary.Read(transport, binary.LittleEndian, &length)
 				if err != nil {
 					goto error_occur
 				}
 				data := make([]byte, length)
-				n, err := io.ReadFull(conn, data)
+				n, err := io.ReadFull(transport, data)
 				if err != nil || n != int(length) {
 					goto error_occur
 				}
@@ -179,7 +178,7 @@ func (s *Session) addConn(conn net.Conn) {
 					data:   data,
 				}
 			case ACK:
-				err := binary.Read(conn, binary.LittleEndian, &serial)
+				err := binary.Read(transport, binary.LittleEndian, &serial)
 				if err != nil {
 					goto error_occur
 				}
@@ -188,30 +187,30 @@ func (s *Session) addConn(conn net.Conn) {
 		}
 		return
 	error_occur:
-		if !s.IsClosing { // conn error
-			s.errConn <- conn
+		if !s.IsClosing { // transport error
+			s.errTransport <- transport
 		}
 		return
 	}()
 }
 
-func (s *Session) delConn(conn net.Conn) {
-	s.Log("conn error")
+func (s *Session) removeTransport(transport Transport) {
+	s.Log("transport error")
 	index := -1
-	for i, c := range s.conns {
-		if c == conn {
+	for i, c := range s.transports {
+		if c == transport {
 			index = i
 			break
 		}
 	}
 	if index > 0 { // delete
-		s.Log("delete conn")
-		s.conns[index].Close()
-		s.Signal("DelConn", len(s.conns))
-		s.conns = append(s.conns[:index], s.conns[index+1:]...)
+		s.Log("remove transport")
+		s.transports[index].Close()
+		s.Signal("RemoveTransport", len(s.transports))
+		s.transports = append(s.transports[:index], s.transports[index+1:]...)
 	}
-	if len(s.conns) == 0 {
-		panic("No conns. fixme") //TODO
+	if len(s.transports) == 0 {
+		panic("No transport. fixme") //TODO
 	}
 }
 
@@ -250,13 +249,13 @@ func (s *Session) sendPacket(packet *Packet) {
 	binary.Write(buf, binary.LittleEndian, packet.serial)
 	binary.Write(buf, binary.LittleEndian, uint16(len(packet.data)))
 	buf.Write(packet.data)
-	// select conn
-	conn := s.conns[rand.Intn(len(s.conns))]
-	// write to conn
-	n, err := conn.Write(buf.Bytes())
+	// select transport
+	transport := s.transports[rand.Intn(len(s.transports))]
+	// write to transport
+	n, err := transport.Write(buf.Bytes())
 	if err != nil || n != len(buf.Bytes()) {
 		if !s.IsClosing {
-			s.delConn(conn)
+			s.removeTransport(transport)
 			return
 		}
 	}
@@ -279,13 +278,13 @@ func (s *Session) sendAck(serial uint32) {
 	buf := new(bytes.Buffer)
 	buf.WriteByte(ACK)
 	binary.Write(buf, binary.LittleEndian, serial)
-	// select conn
-	conn := s.conns[rand.Intn(len(s.conns))]
-	// write to conn
-	n, err := conn.Write(buf.Bytes())
+	// select transport
+	transport := s.transports[rand.Intn(len(s.transports))]
+	// write to transport
+	n, err := transport.Write(buf.Bytes())
 	if err != nil || n != len(buf.Bytes()) {
 		if !s.IsClosing {
-			s.delConn(conn)
+			s.removeTransport(transport)
 		}
 	}
 }

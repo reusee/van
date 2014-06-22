@@ -5,12 +5,12 @@ import (
 	"time"
 )
 
-func TestConnect(t *testing.T) {
+func TestNewSession(t *testing.T) {
 	addr := "127.0.0.1:34500"
 
 	serverDone := make(chan bool)
 	var serverSession *Session
-	newConn := make(chan bool)
+	newTransport := make(chan bool)
 
 	// server
 	server, err := NewServer(addr)
@@ -18,13 +18,13 @@ func TestConnect(t *testing.T) {
 		t.Fatalf("NewServer")
 	}
 	defer server.Close()
-	// listen conn
+	// listen session
 	go func() {
 		for session := range server.NewSession {
 			go func() {
 				serverSession = session
-				session.OnSignal("NewConn", func() {
-					newConn <- true
+				session.OnSignal("NewTransport", func() {
+					newTransport <- true
 				})
 				close(serverDone)
 			}()
@@ -45,22 +45,22 @@ func TestConnect(t *testing.T) {
 			t.Fatalf("session fail")
 		}
 	case <-time.After(time.Second * 3):
-		t.Fatalf("connect fail")
+		t.Fatalf("client session fail")
 	}
 
-	// new conn
+	// new transport
 	for i := 0; i < 8; i++ {
-		err = client.NewConn()
+		err = client.NewTransport()
 		if err != nil {
-			t.Fatalf("NewConn: %v", err)
+			t.Fatalf("NewTransport: %v", err)
 		}
 		select {
-		case <-newConn:
-			if <-client.getConnsLen != <-serverSession.getConnsLen {
-				t.Fatalf("NewConn")
+		case <-newTransport:
+			if <-client.getTransportCount != <-serverSession.getTransportCount {
+				t.Fatalf("NewTransport")
 			}
 		case <-time.After(time.Second):
-			t.Fatalf("NewConn timeout")
+			t.Fatalf("NewTransport timeout")
 		}
 	}
 

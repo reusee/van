@@ -22,9 +22,11 @@ func TestSend(t *testing.T) {
 	go func() {
 		for session := range server.NewSession {
 			go func() {
-				session.OnSignal("Log", func(arg interface{}) {
-					fmt.Printf("SERVER: %s\n", arg.(string))
-				})
+				/*
+					session.OnSignal("Log", func(arg interface{}) {
+						fmt.Printf("SERVER: %s\n", arg.(string))
+					})
+				*/
 				i := 0
 				for data := range session.Recv {
 					if string(data) != fmt.Sprintf("%d", i) {
@@ -44,13 +46,15 @@ func TestSend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient %v", err)
 	}
-	client.OnSignal("Log", func(arg interface{}) {
-		fmt.Printf("CLIENT: %s\n", arg.(string))
-	})
+	/*
+		client.OnSignal("Log", func(arg interface{}) {
+			fmt.Printf("CLIENT: %s\n", arg.(string))
+		})
+	*/
 	for i := 0; i < 16; i++ {
-		err = client.NewConn()
+		err = client.NewTransport()
 		if err != nil {
-			t.Fatalf("NewConn %v", err)
+			t.Fatalf("NewTransport %v", err)
 		}
 	}
 
