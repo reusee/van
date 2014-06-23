@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
-	"strconv"
 	"time"
 
 	"github.com/reusee/closer"
@@ -38,7 +37,7 @@ type Session struct {
 	outgoingPackets   chan *Packet
 	outCheckTicker    *time.Ticker
 	maxSendingPackets int
-	sendingPackets    int
+	sendingPacketsMap map[string]*Packet
 
 	statResend int
 
@@ -62,6 +61,7 @@ func makeSession() *Session {
 		incomingPackets:   make(chan *Packet),
 		incomingAcks:      make(chan *Packet),
 		outgoingPackets:   make(chan *Packet),
+		sendingPacketsMap: make(map[string]*Packet),
 		maxSendingPackets: 1024,
 		outCheckTicker:    time.NewTicker(time.Millisecond * 100),
 		getTransportCount: make(chan int),
@@ -223,25 +223,19 @@ func (s *Session) NewConn() *Conn {
 }
 
 func (s *Session) handleOutgoingPacket(packet *Packet) {
-	packet.conn.sendingPacketsMap[packet.serial] = packet
-	packet.conn.sendingPacketsList.PushBack(packet)
-	s.sendingPackets++
-	if s.sendingPackets >= s.maxSendingPackets {
+	s.sendingPacketsMap[fmt.Sprintf("%d:%d", packet.conn.id, packet.serial)] = packet
+	if len(s.sendingPacketsMap) >= s.maxSendingPackets {
 		s.outPacketCase.Disable()
 	}
 	s.sendPacket(packet)
 }
 
 func (s *Session) checkOutgoingPackets() {
-	for _, conn := range s.conns {
-		s.Log("checking conn %d, %d packets", conn.id, len(conn.sendingPacketsMap))
-		now := time.Now()
-		for e := conn.sendingPacketsList.Front(); e != nil; e = e.Next() {
-			packet := e.Value.(*Packet)
-			if packet.resendTimeout == 0 || packet.resendTimeout > 0 && packet.sentTime.Add(packet.resendTimeout).After(now) {
-				s.Log("resend %d", packet.serial)
-				s.sendPacket(packet)
-			}
+	now := time.Now()
+	for _, packet := range s.sendingPacketsMap {
+		if packet.resendTimeout == 0 || packet.resendTimeout > 0 && packet.sentTime.Add(packet.resendTimeout).After(now) {
+			s.Log("resend %d", packet.serial)
+			s.sendPacket(packet)
 		}
 	}
 }
@@ -340,24 +334,11 @@ func (s *Session) handleIncomingAck(packet *Packet) {
 	packet.conn = s.conns[packet.connId] // conn must be non-null here
 	s.Log("incoming ack %d", packet.serial)
 	conn := packet.conn
-	if packet, ok := conn.sendingPacketsMap[packet.serial]; ok {
-		packet.acked = true
-		delete(conn.sendingPacketsMap, packet.serial)
-		s.Signal("Ack " + strconv.Itoa(int(packet.serial)))
-	}
-	e := conn.sendingPacketsList.Front()
-	for e != nil {
-		packet := e.Value.(*Packet)
-		if packet.acked {
-			s.sendingPackets--
-			if s.sendingPackets < s.maxSendingPackets {
-				s.outPacketCase.Enable()
-			}
-			cur := e
-			e = e.Next()
-			conn.sendingPacketsList.Remove(cur)
-		} else {
-			break
+	key := fmt.Sprintf("%d:%d", conn.id, packet.serial)
+	if _, ok := s.sendingPacketsMap[key]; ok {
+		delete(s.sendingPacketsMap, key)
+		if len(s.sendingPacketsMap) < s.maxSendingPackets {
+			s.outPacketCase.Enable()
 		}
 	}
 }

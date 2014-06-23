@@ -14,8 +14,6 @@ type Packet struct {
 	sentTime          time.Time
 	resendTimeout     time.Duration
 	baseResendTimeout time.Duration
-
-	acked bool
 }
 
 func (c *Conn) newPacket(data []byte) *Packet {
