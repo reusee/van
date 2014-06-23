@@ -15,10 +15,8 @@ import (
 )
 
 const (
-	_DataPacket = byte(1)
-	_AckPacket  = byte(2)
-
-	DATA = iota
+	DATA = byte(1)
+	ACK  = byte(2)
 )
 
 type Session struct {
@@ -66,7 +64,7 @@ type Packet struct {
 	Conn   *Conn
 	connId int64
 
-	Type   int
+	Type   byte
 	serial uint32
 	Data   []byte
 
@@ -183,7 +181,7 @@ func (s *Session) addTransport(transport Transport) {
 			}
 			// data or ack
 			switch packetType {
-			case _DataPacket: // data
+			case DATA: // data
 				err = binary.Read(transport, binary.LittleEndian, &serial)
 				if err != nil {
 					goto error_occur
@@ -203,12 +201,13 @@ func (s *Session) addTransport(transport Transport) {
 					serial: serial,
 					Data:   data,
 				}
-			case _AckPacket:
+			case ACK:
 				err := binary.Read(transport, binary.LittleEndian, &serial)
 				if err != nil {
 					goto error_occur
 				}
 				s.incomingAcks <- &Packet{
+					Type:   ACK,
 					connId: connId,
 					serial: serial,
 				}
@@ -293,7 +292,7 @@ func (s *Session) sendPacket(packet *Packet) {
 	// pack packet
 	buf := new(bytes.Buffer)
 	binary.Write(buf, binary.LittleEndian, packet.Conn.Id)
-	buf.WriteByte(_DataPacket)
+	buf.WriteByte(DATA)
 	binary.Write(buf, binary.LittleEndian, packet.serial)
 	binary.Write(buf, binary.LittleEndian, uint16(len(packet.Data)))
 	buf.Write(packet.Data)
@@ -325,7 +324,7 @@ func (s *Session) sendAck(packet *Packet) {
 	// pack
 	buf := new(bytes.Buffer)
 	binary.Write(buf, binary.LittleEndian, packet.Conn.Id)
-	buf.WriteByte(_AckPacket)
+	buf.WriteByte(ACK)
 	binary.Write(buf, binary.LittleEndian, packet.serial)
 	// select transport
 	transport := s.transports[rand.Intn(len(s.transports))]
