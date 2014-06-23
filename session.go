@@ -2,7 +2,6 @@ package van
 
 import (
 	"bytes"
-	"container/heap"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -40,10 +39,11 @@ type Session struct {
 	newTransport chan Transport
 	errTransport chan Transport
 
-	incomingPackets chan *Packet
-	incomingAcks    chan *Packet
-	recvIn          chan Message
-	Recv            chan Message
+	incomingPackets    chan *Packet
+	incomingPacketsMap map[string]*Packet
+	incomingAcks       chan *Packet
+	recvIn             chan Message
+	Recv               chan Message
 
 	outgoingPackets   chan *Packet
 	outCheckTicker    *time.Ticker
@@ -63,22 +63,23 @@ type Session struct {
 
 func makeSession() *Session {
 	session := &Session{
-		Closer:            closer.NewCloser(),
-		Signaler:          signaler.NewSignaler(),
-		conns:             make(map[int64]*Conn),
-		delConn:           make(chan *Conn),
-		newTransport:      make(chan Transport, 128),
-		errTransport:      make(chan Transport),
-		incomingPackets:   make(chan *Packet),
-		incomingAcks:      make(chan *Packet),
-		recvIn:            make(chan Message),
-		Recv:              make(chan Message),
-		outgoingPackets:   make(chan *Packet),
-		sendingPacketsMap: make(map[string]*Packet),
-		maxSendingPackets: 1024,
-		outCheckTicker:    time.NewTicker(time.Millisecond * 100),
-		getTransportCount: make(chan int),
-		getStatResend:     make(chan int),
+		Closer:             closer.NewCloser(),
+		Signaler:           signaler.NewSignaler(),
+		conns:              make(map[int64]*Conn),
+		delConn:            make(chan *Conn),
+		newTransport:       make(chan Transport, 128),
+		errTransport:       make(chan Transport),
+		incomingPackets:    make(chan *Packet),
+		incomingPacketsMap: make(map[string]*Packet),
+		incomingAcks:       make(chan *Packet),
+		recvIn:             make(chan Message),
+		Recv:               make(chan Message),
+		outgoingPackets:    make(chan *Packet),
+		sendingPacketsMap:  make(map[string]*Packet),
+		maxSendingPackets:  1024,
+		outCheckTicker:     time.NewTicker(time.Millisecond * 100),
+		getTransportCount:  make(chan int),
+		getStatResend:      make(chan int),
 	}
 	recvLink := ic.Link(session.recvIn, session.Recv)
 	session.OnClose(func() {
@@ -328,28 +329,24 @@ func (s *Session) handleIncomingPacket(packet *Packet) {
 		conn.ackSerial++
 	} else if packet.serial > conn.ackSerial { // out of order
 		s.Log("out of order %d", packet.serial)
-		heap.Push(conn.incomingHeap, packet)
+		s.incomingPacketsMap[fmt.Sprintf("%d:%d", conn.Id, packet.serial)] = packet
 	} else if packet.serial < conn.ackSerial { // duplicated
 		s.Log("dup %d", packet.serial)
 	}
 	// try pop
-	for conn.incomingHeap.Len() > 0 {
-		packet := heap.Pop(conn.incomingHeap).(*Packet)
-		if packet.serial == conn.ackSerial { // ready to provide
-			s.Log("provide %d", packet.serial)
-			s.recvIn <- Message{
-				Type:   DATA,
-				ConnId: conn.Id,
-				Data:   packet.data,
-			}
-			conn.ackSerial++
-		} else if packet.serial < conn.ackSerial { // duplicated
-			s.Log("dup %d", packet.serial)
-		} else if packet.serial > conn.ackSerial { // not ready
-			s.Log("not ready %d", packet.serial)
-			heap.Push(conn.incomingHeap, packet)
-			break
+	nextKey := fmt.Sprintf("%d:%d", conn.Id, conn.ackSerial)
+	packet, ok = s.incomingPacketsMap[nextKey]
+	for ok {
+		s.Log("provide %d", packet.serial)
+		s.recvIn <- Message{
+			Type:   DATA,
+			ConnId: conn.Id,
+			Data:   packet.data,
 		}
+		conn.ackSerial++
+		delete(s.incomingPacketsMap, nextKey)
+		nextKey = fmt.Sprintf("%d:%d", conn.Id, conn.ackSerial)
+		packet, ok = s.incomingPacketsMap[nextKey]
 	}
 }
 

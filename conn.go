@@ -1,27 +1,20 @@
 package van
 
-import (
-	"container/heap"
-
-	"github.com/reusee/closer"
-)
+import "github.com/reusee/closer"
 
 type Conn struct {
 	closer.Closer
-	session      *Session
-	Id           int64
-	serial       uint32
-	ackSerial    uint32
-	incomingHeap *Heap
+	session   *Session
+	Id        int64
+	serial    uint32
+	ackSerial uint32
 }
 
 func (s *Session) makeConn() *Conn {
 	conn := &Conn{
-		Closer:       closer.NewCloser(),
-		session:      s,
-		incomingHeap: new(Heap),
+		Closer:  closer.NewCloser(),
+		session: s,
 	}
-	heap.Init(conn.incomingHeap)
 	return conn
 }
 
