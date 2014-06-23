@@ -68,7 +68,7 @@ func TestSend(t *testing.T) {
 
 	conn := client.NewConn()
 	for i := 0; i < n; i++ {
-		serial := conn.Send([]byte(fmt.Sprintf("%d", i)))
+		serial := client.Send(conn, []byte(fmt.Sprintf("%d", i)))
 		client.OnSignal("Ack "+strconv.Itoa(int(serial)), func() bool {
 			fmt.Printf("CLIENT: Ack %d\n", serial)
 			return true

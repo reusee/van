@@ -76,7 +76,7 @@ func TestInterrupt(t *testing.T) {
 	go func() {
 		i := 0
 		for {
-			conn.Send([]byte(fmt.Sprintf("%d", i)))
+			client.Send(conn, []byte(fmt.Sprintf("%d", i)))
 			i++
 		}
 	}()

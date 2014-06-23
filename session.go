@@ -61,6 +61,25 @@ type Session struct {
 	outPacketCase *se.Case
 }
 
+type Conn struct {
+	closer.Closer
+	Id        int64
+	serial    uint32
+	ackSerial uint32
+}
+
+type Packet struct {
+	conn   *Conn
+	connId int64
+
+	serial uint32
+	data   []byte
+
+	sentTime          time.Time
+	resendTimeout     time.Duration
+	baseResendTimeout time.Duration
+}
+
 func makeSession() *Session {
 	session := &Session{
 		Closer:             closer.NewCloser(),
@@ -238,6 +257,13 @@ func (s *Session) NewConn() *Conn {
 	return conn
 }
 
+func (s *Session) makeConn() *Conn {
+	conn := &Conn{
+		Closer: closer.NewCloser(),
+	}
+	return conn
+}
+
 func (s *Session) handleOutgoingPacket(packet *Packet) {
 	s.sendingPacketsMap[fmt.Sprintf("%d:%d", packet.conn.Id, packet.serial)] = packet
 	if len(s.sendingPacketsMap) >= s.maxSendingPackets {
@@ -254,6 +280,17 @@ func (s *Session) checkOutgoingPackets() {
 			s.sendPacket(packet)
 		}
 	}
+}
+
+func (s *Session) Send(conn *Conn, data []byte) uint32 {
+	packet := &Packet{
+		conn:   conn,
+		serial: conn.serial,
+		data:   data,
+	}
+	conn.serial++
+	s.outgoingPackets <- packet
+	return packet.serial
 }
 
 func (s *Session) sendPacket(packet *Packet) {
