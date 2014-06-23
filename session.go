@@ -10,14 +10,23 @@ import (
 	"time"
 
 	"github.com/reusee/closer"
+	ic "github.com/reusee/inf-chan"
 	se "github.com/reusee/selector"
 	"github.com/reusee/signaler"
 )
 
 const (
-	DATA = byte(1)
-	ACK  = byte(2)
+	_DataPacket = byte(1)
+	_AckPacket  = byte(2)
+
+	DATA = iota
 )
+
+type Message struct {
+	Type   int
+	ConnId int64
+	Data   []byte
+}
 
 type Session struct {
 	closer.Closer
@@ -33,6 +42,8 @@ type Session struct {
 
 	incomingPackets chan *Packet
 	incomingAcks    chan *Packet
+	recvIn          chan Message
+	Recv            chan Message
 
 	outgoingPackets   chan *Packet
 	outCheckTicker    *time.Ticker
@@ -60,6 +71,8 @@ func makeSession() *Session {
 		errTransport:      make(chan Transport),
 		incomingPackets:   make(chan *Packet),
 		incomingAcks:      make(chan *Packet),
+		recvIn:            make(chan Message),
+		Recv:              make(chan Message),
 		outgoingPackets:   make(chan *Packet),
 		sendingPacketsMap: make(map[string]*Packet),
 		maxSendingPackets: 1024,
@@ -67,7 +80,9 @@ func makeSession() *Session {
 		getTransportCount: make(chan int),
 		getStatResend:     make(chan int),
 	}
+	recvLink := ic.Link(session.recvIn, session.Recv)
 	session.OnClose(func() {
+		close(recvLink)
 		session.CloseSignaler()
 	})
 	go session.start()
@@ -105,7 +120,7 @@ func (s *Session) start() {
 		s.checkOutgoingPackets()
 	}, nil)
 	selector.Add(s.delConn, func(recv interface{}) {
-		delete(s.conns, recv.(*Conn).id)
+		delete(s.conns, recv.(*Conn).Id)
 	}, nil)
 	// getters
 	selector.Add(s.getTransportCount, nil, func() interface{} {
@@ -153,7 +168,7 @@ func (s *Session) addTransport(transport Transport) {
 			}
 			// data or ack
 			switch packetType {
-			case DATA: // data
+			case _DataPacket: // data
 				err = binary.Read(transport, binary.LittleEndian, &serial)
 				if err != nil {
 					goto error_occur
@@ -172,7 +187,7 @@ func (s *Session) addTransport(transport Transport) {
 					serial: serial,
 					data:   data,
 				}
-			case ACK:
+			case _AckPacket:
 				err := binary.Read(transport, binary.LittleEndian, &serial)
 				if err != nil {
 					goto error_occur
@@ -214,8 +229,8 @@ func (s *Session) removeTransport(transport Transport) {
 
 func (s *Session) NewConn() *Conn {
 	conn := s.makeConn()
-	conn.id = rand.Int63()
-	s.conns[conn.id] = conn
+	conn.Id = rand.Int63()
+	s.conns[conn.Id] = conn
 	conn.OnClose(func() {
 		s.delConn <- conn
 	})
@@ -223,7 +238,7 @@ func (s *Session) NewConn() *Conn {
 }
 
 func (s *Session) handleOutgoingPacket(packet *Packet) {
-	s.sendingPacketsMap[fmt.Sprintf("%d:%d", packet.conn.id, packet.serial)] = packet
+	s.sendingPacketsMap[fmt.Sprintf("%d:%d", packet.conn.Id, packet.serial)] = packet
 	if len(s.sendingPacketsMap) >= s.maxSendingPackets {
 		s.outPacketCase.Disable()
 	}
@@ -243,8 +258,8 @@ func (s *Session) checkOutgoingPackets() {
 func (s *Session) sendPacket(packet *Packet) {
 	// pack packet
 	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, packet.conn.id)
-	buf.WriteByte(DATA)
+	binary.Write(buf, binary.LittleEndian, packet.conn.Id)
+	buf.WriteByte(_DataPacket)
 	binary.Write(buf, binary.LittleEndian, packet.serial)
 	binary.Write(buf, binary.LittleEndian, uint16(len(packet.data)))
 	buf.Write(packet.data)
@@ -275,8 +290,8 @@ func (s *Session) sendAck(packet *Packet) {
 	s.Log("send ack %d", packet.serial)
 	// pack
 	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, packet.conn.id)
-	buf.WriteByte(ACK)
+	binary.Write(buf, binary.LittleEndian, packet.conn.Id)
+	buf.WriteByte(_AckPacket)
 	binary.Write(buf, binary.LittleEndian, packet.serial)
 	// select transport
 	transport := s.transports[rand.Intn(len(s.transports))]
@@ -293,19 +308,23 @@ func (s *Session) handleIncomingPacket(packet *Packet) {
 	conn, ok := s.conns[packet.connId]
 	if !ok { // create new conn
 		conn = s.makeConn()
-		conn.id = packet.connId
-		s.conns[conn.id] = conn
+		conn.Id = packet.connId
+		s.conns[conn.Id] = conn
 		conn.OnClose(func() {
 			s.delConn <- conn
 		})
 		s.Signal("NewConn", conn)
-		s.Log("NewConn from remote %d", conn.id)
+		s.Log("NewConn from remote %d", conn.Id)
 	}
 	packet.conn = conn
 	s.Log("incoming data %d", packet.serial)
 	if packet.serial == conn.ackSerial { // in order
 		s.Log("in order %d", packet.serial)
-		conn.recvIn <- packet.data
+		s.recvIn <- Message{
+			Type:   DATA,
+			ConnId: conn.Id,
+			Data:   packet.data,
+		}
 		conn.ackSerial++
 	} else if packet.serial > conn.ackSerial { // out of order
 		s.Log("out of order %d", packet.serial)
@@ -318,7 +337,11 @@ func (s *Session) handleIncomingPacket(packet *Packet) {
 		packet := heap.Pop(conn.incomingHeap).(*Packet)
 		if packet.serial == conn.ackSerial { // ready to provide
 			s.Log("provide %d", packet.serial)
-			conn.recvIn <- packet.data
+			s.recvIn <- Message{
+				Type:   DATA,
+				ConnId: conn.Id,
+				Data:   packet.data,
+			}
 			conn.ackSerial++
 		} else if packet.serial < conn.ackSerial { // duplicated
 			s.Log("dup %d", packet.serial)
@@ -334,7 +357,7 @@ func (s *Session) handleIncomingAck(packet *Packet) {
 	packet.conn = s.conns[packet.connId] // conn must be non-null here
 	s.Log("incoming ack %d", packet.serial)
 	conn := packet.conn
-	key := fmt.Sprintf("%d:%d", conn.id, packet.serial)
+	key := fmt.Sprintf("%d:%d", conn.Id, packet.serial)
 	if _, ok := s.sendingPacketsMap[key]; ok {
 		delete(s.sendingPacketsMap, key)
 		if len(s.sendingPacketsMap) < s.maxSendingPackets {

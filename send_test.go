@@ -31,11 +31,14 @@ func TestSend(t *testing.T) {
 					conn := arg.(*Conn)
 					go func() {
 						i := 0
-						for data := range conn.Recv {
-							if string(data) != fmt.Sprintf("%d", i) {
+						for msg := range session.Recv {
+							if msg.ConnId != conn.Id {
+								continue
+							}
+							if string(msg.Data) != fmt.Sprintf("%d", i) {
 								t.Fatalf("Recv")
 							}
-							fmt.Printf("from client %s\n", data)
+							fmt.Printf("from client %s\n", msg.Data)
 							i++
 							if i == n {
 								close(serverDone)

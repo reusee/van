@@ -29,9 +29,12 @@ func TestInterrupt(t *testing.T) {
 					conn := arg.(*Conn)
 					go func() {
 						n := 0
-						for data := range conn.Recv {
+						for msg := range session.Recv {
+							if msg.ConnId != conn.Id {
+								continue
+							}
 							if n%1000 == 0 {
-								fmt.Printf("=====================> %s\n", data)
+								fmt.Printf("=====================> %s\n", msg.Data)
 							}
 							n++
 							if n > 30000 {

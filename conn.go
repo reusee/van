@@ -4,18 +4,15 @@ import (
 	"container/heap"
 
 	"github.com/reusee/closer"
-	ic "github.com/reusee/inf-chan"
 )
 
 type Conn struct {
 	closer.Closer
 	session      *Session
-	id           int64
+	Id           int64
 	serial       uint32
 	ackSerial    uint32
 	incomingHeap *Heap
-	recvIn       chan []byte
-	Recv         chan []byte
 }
 
 func (s *Session) makeConn() *Conn {
@@ -23,14 +20,8 @@ func (s *Session) makeConn() *Conn {
 		Closer:       closer.NewCloser(),
 		session:      s,
 		incomingHeap: new(Heap),
-		recvIn:       make(chan []byte),
-		Recv:         make(chan []byte),
 	}
 	heap.Init(conn.incomingHeap)
-	recvLink := ic.Link(conn.recvIn, conn.Recv)
-	conn.OnClose(func() {
-		close(recvLink)
-	})
 	return conn
 }
 
