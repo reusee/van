@@ -301,7 +301,10 @@ func (s *Session) sendPacket(packet *Packet) {
 	// select transport
 	transport := s.transports[rand.Intn(len(s.transports))]
 	// write to transport
+	s.Log("Start send through %v", transport)
+	t0 := time.Now()
 	n, err := transport.Write(buf.Bytes())
+	s.Log("Sent in %v", time.Now().Sub(t0))
 	if err != nil || n != len(buf.Bytes()) {
 		if !s.IsClosing {
 			s.removeTransport(transport)
