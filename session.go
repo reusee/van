@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"time"
 
 	"github.com/reusee/closer"
@@ -159,6 +160,7 @@ func (s *Session) start() {
 }
 
 func (s *Session) addTransport(transport Transport) {
+	transport.(*net.TCPConn).SetWriteBuffer(8 * 1024 * 1024)
 	s.transports = append(s.transports, transport)
 	s.Signal("NewTransport", len(s.transports))
 	// start reader
