@@ -314,11 +314,11 @@ func (s *Session) sendPacket(packet *Packet) {
 	// set packet
 	packet.sentTime = time.Now()
 	if packet.resendTimeout == 0 { // newly created packet
-		packet.resendTimeout = time.Millisecond * 500 // first resend timeout
-		packet.baseResendTimeout = time.Millisecond * 500
+		packet.resendTimeout = time.Millisecond * 5000 // first resend timeout
+		packet.baseResendTimeout = time.Millisecond * 5000
 	} else {
 		packet.baseResendTimeout *= 2
-		packet.resendTimeout = packet.baseResendTimeout + time.Millisecond*time.Duration(rand.Intn(500))
+		packet.resendTimeout = packet.baseResendTimeout + time.Millisecond*time.Duration(rand.Intn(1000))
 		// stat
 		s.statResend++
 	}
