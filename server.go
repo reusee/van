@@ -2,8 +2,12 @@ package van
 
 import (
 	"encoding/binary"
+	"fmt"
 	"log"
 	"net"
+	"net/http"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/reusee/closer"
@@ -108,4 +112,35 @@ func (s *Server) newSession(sessionId int64, transport Transport) *Session {
 	session.id = sessionId
 	session.newTransport <- transport
 	return session
+}
+
+var sessionPathPattern = regexp.MustCompile("/[0-9]+")
+
+func (s *Server) StartDebug(addr string) {
+	http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Path
+		if path == "/" { // index
+			w.Write([]byte(`
+<html>
+	<body>
+		`))
+			for id, _ := range s.sessions {
+				w.Write([]byte(fmt.Sprintf(`
+		<p><a href="/%d">%d</a></p>
+			`, id, id)))
+			}
+			w.Write([]byte(`
+	</body>
+</html>
+		`))
+		} else if sessionPathPattern.MatchString(path) { // session
+			sessionId, err := strconv.ParseInt(path[1:], 10, 64)
+			if err == nil {
+				if session, ok := s.sessions[sessionId]; ok {
+					session.handleHttp(w)
+				}
+			}
+		}
+	})
+	go http.ListenAndServe(addr, nil)
 }

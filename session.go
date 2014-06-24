@@ -42,8 +42,7 @@ type Session struct {
 	outCheckTicker    *time.Ticker
 	maxSendingPackets int
 	sendingPacketsMap map[string]*Packet
-
-	statResend int
+	outPacketCase     *se.Case
 
 	// getters
 	getTransportCount chan int
@@ -51,7 +50,9 @@ type Session struct {
 	// setters
 	SetMaxSendingPackets chan int
 
-	outPacketCase *se.Case
+	// statistics and debug
+	debugEntries []func() []string
+	statResend   int
 }
 
 type Conn struct {
@@ -59,6 +60,7 @@ type Conn struct {
 	Id        int64
 	serial    uint32
 	ackSerial uint32
+	start     time.Time
 }
 
 type Packet struct {
@@ -99,12 +101,17 @@ func makeSession() *Session {
 		close(recvLink)
 		session.CloseSignaler()
 	})
+	session.setDebugEntries()
 	go session.start()
 	return session
 }
 
 func (s *Session) Log(format string, args ...interface{}) {
 	s.Signal("Log", fmt.Sprintf(format, args...))
+}
+
+func (s *Session) addDebugEntry(cb func() []string) {
+	s.debugEntries = append(s.debugEntries, cb)
 }
 
 func (s *Session) start() {
@@ -257,6 +264,7 @@ func (s *Session) NewConn() *Conn {
 func (s *Session) makeConn() *Conn {
 	conn := &Conn{
 		Closer: closer.NewCloser(),
+		start:  time.Now(),
 	}
 	return conn
 }
