@@ -57,8 +57,5 @@ func (c *Client) NewConn() *Conn {
 	conn.Id = c.nextConnId
 	c.nextConnId++
 	c.conns[conn.Id] = conn
-	conn.OnClose(func() {
-		c.delConn <- conn
-	})
 	return conn
 }

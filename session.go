@@ -29,7 +29,6 @@ type Session struct {
 	id         int64
 	transports []Transport
 	conns      map[uint32]*Conn
-	delConn    chan *Conn
 
 	newTransport chan Transport
 	errTransport chan Transport
@@ -58,7 +57,6 @@ type Session struct {
 }
 
 type Conn struct {
-	closer.Closer
 	Id           uint32
 	serial       uint32
 	ackSerial    uint32
@@ -85,7 +83,6 @@ func makeSession() *Session {
 		Closer:             closer.NewCloser(),
 		Signaler:           signaler.NewSignaler(),
 		conns:              make(map[uint32]*Conn),
-		delConn:            make(chan *Conn, 128),
 		newTransport:       make(chan Transport, 128),
 		errTransport:       make(chan Transport),
 		incomingPackets:    make(chan *Packet),
@@ -145,9 +142,6 @@ func (s *Session) start() {
 	}, nil)
 	selector.Add(s.outCheckTicker.C, func() {
 		s.checkOutgoingPackets()
-	}, nil)
-	selector.Add(s.delConn, func(recv interface{}) {
-		delete(s.conns, recv.(*Conn).Id)
 	}, nil)
 	// getters
 	selector.Add(s.getTransportCount, nil, func() interface{} {
@@ -269,10 +263,13 @@ func (s *Session) removeTransport(transport Transport) {
 
 func (s *Session) makeConn() *Conn {
 	conn := &Conn{
-		Closer: closer.NewCloser(),
-		start:  time.Now(),
+		start: time.Now(),
 	}
 	return conn
+}
+
+func (s *Session) closeConn(conn *Conn) {
+	delete(s.conns, conn.Id)
 }
 
 func (s *Session) handleOutgoingPacket(packet *Packet) {
@@ -315,7 +312,7 @@ func (s *Session) Finish(conn *Conn) {
 	s.outgoingPackets <- packet
 	conn.localClosed = true
 	if conn.remoteClosed {
-		conn.Close()
+		s.closeConn(conn)
 	}
 }
 
@@ -396,9 +393,6 @@ func (s *Session) handleIncomingPacket(packet *Packet) error {
 		conn = s.makeConn()
 		conn.Id = packet.connId
 		s.conns[conn.Id] = conn
-		conn.OnClose(func() {
-			s.delConn <- conn
-		})
 		s.Signal("NewConn", conn)
 		s.Log("NewConn from remote %d", conn.Id)
 	}
@@ -411,7 +405,7 @@ func (s *Session) handleIncomingPacket(packet *Packet) error {
 		if packet.Type == FIN {
 			conn.remoteClosed = true
 			if conn.localClosed { // close conn
-				conn.Close()
+				s.closeConn(conn)
 			}
 		}
 	} else if packet.serial > conn.ackSerial { // out of order
@@ -430,7 +424,7 @@ func (s *Session) handleIncomingPacket(packet *Packet) error {
 		if packet.Type == FIN {
 			conn.remoteClosed = true
 			if conn.localClosed { // close conn
-				conn.Close()
+				s.closeConn(conn)
 			}
 		}
 		delete(s.incomingPacketsMap, nextKey)
