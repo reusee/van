@@ -3,7 +3,6 @@ package van
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -26,9 +25,11 @@ type Session struct {
 	closer.Closer
 	*signaler.Signaler
 
-	id         int64
-	transports []Transport
-	conns      map[uint32]*Conn
+	id               int64
+	transports       []Transport
+	conns            map[uint32]*Conn
+	closedConnIdEdge uint32
+	closedConnIdMap  map[uint32]bool
 
 	newTransport chan Transport
 	errTransport chan Transport
@@ -83,6 +84,7 @@ func makeSession() *Session {
 		Closer:             closer.NewCloser(),
 		Signaler:           signaler.NewSignaler(),
 		conns:              make(map[uint32]*Conn),
+		closedConnIdMap:    make(map[uint32]bool),
 		newTransport:       make(chan Transport, 128),
 		errTransport:       make(chan Transport),
 		incomingPackets:    make(chan *Packet),
@@ -129,10 +131,8 @@ func (s *Session) start() {
 	}, nil)
 	selector.Add(s.incomingPackets, func(recv interface{}) {
 		packet := recv.(*Packet)
-		err := s.handleIncomingPacket(packet)
-		if err == nil {
-			s.sendAck(packet)
-		}
+		s.sendAck(packet)
+		s.handleIncomingPacket(packet)
 	}, nil)
 	selector.Add(s.incomingAcks, func(recv interface{}) {
 		s.handleIncomingAck(recv.(*Packet))
@@ -270,6 +270,13 @@ func (s *Session) makeConn() *Conn {
 
 func (s *Session) closeConn(conn *Conn) {
 	delete(s.conns, conn.Id)
+	s.closedConnIdMap[conn.Id] = true
+	next := s.closedConnIdEdge + 1
+	for s.closedConnIdMap[next] {
+		delete(s.closedConnIdMap, next)
+		s.closedConnIdEdge = next
+		next++
+	}
 }
 
 func (s *Session) handleOutgoingPacket(packet *Packet) {
@@ -366,7 +373,7 @@ func (s *Session) sendAck(packet *Packet) {
 	}
 	// pack
 	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, packet.Conn.Id)
+	binary.Write(buf, binary.LittleEndian, packet.connId)
 	buf.WriteByte(ACK)
 	binary.Write(buf, binary.LittleEndian, packet.serial)
 	// select transport
@@ -383,11 +390,11 @@ func (s *Session) sendAck(packet *Packet) {
 	}
 }
 
-func (s *Session) handleIncomingPacket(packet *Packet) error {
+func (s *Session) handleIncomingPacket(packet *Packet) {
 	conn, ok := s.conns[packet.connId]
 	if !ok {
-		if packet.serial != 0 { // orphan packet
-			return errors.New(fmt.Sprintf("orphan %d %d", packet.connId, packet.serial))
+		if packet.connId <= s.closedConnIdEdge || s.closedConnIdMap[packet.connId] { // orphan packet
+			return
 		}
 		// create new incoming conn
 		conn = s.makeConn()
@@ -431,7 +438,6 @@ func (s *Session) handleIncomingPacket(packet *Packet) error {
 		nextKey = fmt.Sprintf("%d:%d", conn.Id, conn.ackSerial)
 		packet, ok = s.incomingPacketsMap[nextKey]
 	}
-	return nil
 }
 
 func (s *Session) handleIncomingAck(packet *Packet) {

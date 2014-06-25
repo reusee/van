@@ -24,6 +24,17 @@ func (s *Session) setDebugEntries() {
 		}
 		return
 	})
+	s.addDebugEntry(func() (ret []string) {
+		ret = append(ret, fmt.Sprintf("<Closed Connection Ids> %d", s.closedConnIdEdge))
+		ids := ""
+		for id, _ := range s.closedConnIdMap {
+			ids += fmt.Sprintf("%d ", id)
+		}
+		if len(ids) > 0 {
+			ret = append(ret, ids)
+		}
+		return
+	})
 	// incoming packets
 	s.addDebugEntry(func() (ret []string) {
 		ret = append(ret, fmt.Sprintf("<Incoming Packets> %d", len(s.incomingPacketsMap)))
