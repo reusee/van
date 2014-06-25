@@ -11,6 +11,7 @@ type Client struct {
 	*Session
 	remoteAddr string
 	lock       sync.Mutex
+	nextConnId uint32
 }
 
 func NewClient(remoteAddr string) (*Client, error) {
@@ -19,6 +20,7 @@ func NewClient(remoteAddr string) (*Client, error) {
 	client := &Client{
 		Session:    session,
 		remoteAddr: remoteAddr,
+		nextConnId: 1,
 	}
 	err := client.NewTransport()
 	if err != nil {
@@ -48,4 +50,15 @@ func (c *Client) CloseRandomTransport() {
 		c.transports[rand.Intn(len(c.transports))].Close()
 	}
 	c.lock.Unlock()
+}
+
+func (c *Client) NewConn() *Conn {
+	conn := c.makeConn()
+	conn.Id = c.nextConnId
+	c.nextConnId++
+	c.conns[conn.Id] = conn
+	conn.OnClose(func() {
+		c.delConn <- conn
+	})
+	return conn
 }

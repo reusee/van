@@ -28,7 +28,7 @@ type Session struct {
 
 	id         int64
 	transports []Transport
-	conns      map[int64]*Conn
+	conns      map[uint32]*Conn
 	delConn    chan *Conn
 
 	newTransport chan Transport
@@ -59,7 +59,7 @@ type Session struct {
 
 type Conn struct {
 	closer.Closer
-	Id           int64
+	Id           uint32
 	serial       uint32
 	ackSerial    uint32
 	localClosed  bool
@@ -69,7 +69,7 @@ type Conn struct {
 
 type Packet struct {
 	Conn   *Conn
-	connId int64
+	connId uint32
 
 	Type   byte
 	serial uint32
@@ -84,7 +84,7 @@ func makeSession() *Session {
 	session := &Session{
 		Closer:             closer.NewCloser(),
 		Signaler:           signaler.NewSignaler(),
-		conns:              make(map[int64]*Conn),
+		conns:              make(map[uint32]*Conn),
 		delConn:            make(chan *Conn, 128),
 		newTransport:       make(chan Transport, 128),
 		errTransport:       make(chan Transport),
@@ -182,7 +182,7 @@ func (s *Session) addTransport(transport Transport) {
 		var serial uint32
 		var length uint16
 		var packetType byte
-		var connId int64
+		var connId uint32
 		for {
 			// read conn id
 			err = binary.Read(transport, binary.LittleEndian, &connId)
@@ -265,16 +265,6 @@ func (s *Session) removeTransport(transport Transport) {
 	if len(s.transports) == 0 {
 		panic("No transport. fixme") //TODO
 	}
-}
-
-func (s *Session) NewConn() *Conn {
-	conn := s.makeConn()
-	conn.Id = rand.Int63()
-	s.conns[conn.Id] = conn
-	conn.OnClose(func() {
-		s.delConn <- conn
-	})
-	return conn
 }
 
 func (s *Session) makeConn() *Conn {
