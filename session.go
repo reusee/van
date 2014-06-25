@@ -3,6 +3,7 @@ package van
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -94,7 +95,7 @@ func makeSession() *Session {
 		Recv:               make(chan *Packet),
 		outgoingPackets:    make(chan *Packet),
 		sendingPacketsMap:  make(map[string]*Packet),
-		maxSendingPackets:  1024,
+		maxSendingPackets:  65536,
 		outCheckTicker:     time.NewTicker(time.Millisecond * 100),
 		getTransportCount:  make(chan int),
 		getStatResend:      make(chan int),
@@ -131,8 +132,10 @@ func (s *Session) start() {
 	}, nil)
 	selector.Add(s.incomingPackets, func(recv interface{}) {
 		packet := recv.(*Packet)
-		s.handleIncomingPacket(packet)
-		s.sendAck(packet)
+		err := s.handleIncomingPacket(packet)
+		if err == nil {
+			s.sendAck(packet)
+		}
 	}, nil)
 	selector.Add(s.incomingAcks, func(recv interface{}) {
 		s.handleIncomingAck(recv.(*Packet))
@@ -393,9 +396,13 @@ func (s *Session) sendAck(packet *Packet) {
 	}
 }
 
-func (s *Session) handleIncomingPacket(packet *Packet) {
+func (s *Session) handleIncomingPacket(packet *Packet) error {
 	conn, ok := s.conns[packet.connId]
-	if !ok { // create new conn
+	if !ok {
+		if packet.serial != 0 { // orphan packet
+			return errors.New(fmt.Sprintf("orphan %d %d", packet.connId, packet.serial))
+		}
+		// create new incoming conn
 		conn = s.makeConn()
 		conn.Id = packet.connId
 		s.conns[conn.Id] = conn
@@ -440,6 +447,7 @@ func (s *Session) handleIncomingPacket(packet *Packet) {
 		nextKey = fmt.Sprintf("%d:%d", conn.Id, conn.ackSerial)
 		packet, ok = s.incomingPacketsMap[nextKey]
 	}
+	return nil
 }
 
 func (s *Session) handleIncomingAck(packet *Packet) {

@@ -18,7 +18,7 @@ func (s *Session) setDebugEntries() {
 		}
 		sort.Sort(sortByStart(conns))
 		for _, conn := range conns {
-			ret = append(ret, fmt.Sprintf("%d:%d:%d id %d serial %d ackSerial %d",
+			ret = append(ret, fmt.Sprintf("%02d:%02d:%02d id %d serial %d ackSerial %d",
 				conn.start.Hour(), conn.start.Minute(), conn.start.Second(),
 				conn.Id, conn.serial, conn.ackSerial))
 		}
