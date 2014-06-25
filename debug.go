@@ -10,7 +10,7 @@ import (
 
 func (s *Session) setDebugEntries() {
 	// connections
-	s.addDebugEntry(func() (ret []string) {
+	s.AddDebugEntry(func() (ret []string) {
 		ret = append(ret, fmt.Sprintf("<Connections> %d", len(s.conns)))
 		conns := make([]*Conn, 0, len(s.conns))
 		for _, conn := range s.conns {
@@ -24,7 +24,7 @@ func (s *Session) setDebugEntries() {
 		}
 		return
 	})
-	s.addDebugEntry(func() (ret []string) {
+	s.AddDebugEntry(func() (ret []string) {
 		ret = append(ret, fmt.Sprintf("<Closed Connection Ids> %d", s.closedConnIdEdge))
 		ids := ""
 		for id, _ := range s.closedConnIdMap {
@@ -36,12 +36,12 @@ func (s *Session) setDebugEntries() {
 		return
 	})
 	// incoming packets
-	s.addDebugEntry(func() (ret []string) {
+	s.AddDebugEntry(func() (ret []string) {
 		ret = append(ret, fmt.Sprintf("<Incoming Packets> %d", len(s.incomingPacketsMap)))
 		return
 	})
 	// sending packets
-	s.addDebugEntry(func() (ret []string) {
+	s.AddDebugEntry(func() (ret []string) {
 		ret = append(ret, fmt.Sprintf("<Sending Packets> %d", len(s.sendingPacketsMap)))
 		return
 	})

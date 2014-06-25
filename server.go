@@ -123,6 +123,7 @@ func (s *Server) StartDebug(addr string) {
 			w.Write([]byte(`
 <html>
 	<body>
+		<p><a href="/debug/pprof">pprof</a></p>
 		`))
 			for id, _ := range s.sessions {
 				w.Write([]byte(fmt.Sprintf(`

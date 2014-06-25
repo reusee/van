@@ -113,7 +113,7 @@ func (s *Session) Log(format string, args ...interface{}) {
 	s.Signal("Log", fmt.Sprintf(format, args...))
 }
 
-func (s *Session) addDebugEntry(cb func() []string) {
+func (s *Session) AddDebugEntry(cb func() []string) {
 	s.debugEntries = append(s.debugEntries, cb)
 }
 
