@@ -18,6 +18,7 @@ import (
 const (
 	DATA = byte(1)
 	ACK  = byte(2)
+	FIN  = byte(4)
 )
 
 type Session struct {
@@ -57,10 +58,12 @@ type Session struct {
 
 type Conn struct {
 	closer.Closer
-	Id        int64
-	serial    uint32
-	ackSerial uint32
-	start     time.Time
+	Id           int64
+	serial       uint32
+	ackSerial    uint32
+	localClosed  bool
+	remoteClosed bool
+	start        time.Time
 }
 
 type Packet struct {
@@ -81,7 +84,7 @@ func makeSession() *Session {
 		Closer:             closer.NewCloser(),
 		Signaler:           signaler.NewSignaler(),
 		conns:              make(map[int64]*Conn),
-		delConn:            make(chan *Conn),
+		delConn:            make(chan *Conn, 128),
 		newTransport:       make(chan Transport, 128),
 		errTransport:       make(chan Transport),
 		incomingPackets:    make(chan *Packet),
@@ -210,6 +213,16 @@ func (s *Session) addTransport(transport Transport) {
 					serial: serial,
 					Data:   data,
 				}
+			case FIN: // finish
+				err = binary.Read(transport, binary.LittleEndian, &serial)
+				if err != nil {
+					goto error_occur
+				}
+				s.incomingPackets <- &Packet{
+					Type:   FIN,
+					connId: connId,
+					serial: serial,
+				}
 			case ACK:
 				err := binary.Read(transport, binary.LittleEndian, &serial)
 				if err != nil {
@@ -289,6 +302,7 @@ func (s *Session) checkOutgoingPackets() {
 
 func (s *Session) Send(conn *Conn, data []byte) uint32 {
 	packet := &Packet{
+		Type:   DATA,
 		Conn:   conn,
 		serial: conn.serial,
 		Data:   data,
@@ -298,16 +312,39 @@ func (s *Session) Send(conn *Conn, data []byte) uint32 {
 	return packet.serial
 }
 
+func (s *Session) Finish(conn *Conn) {
+	packet := &Packet{
+		Type:   FIN,
+		Conn:   conn,
+		serial: conn.serial,
+	}
+	conn.serial++
+	s.outgoingPackets <- packet
+	conn.localClosed = true
+	if conn.remoteClosed {
+		conn.Close()
+	}
+}
+
 func (s *Session) sendPacket(packet *Packet) {
+	// check transport
+	if len(s.transports) == 0 {
+		return
+	}
 	// pack packet
 	buf := new(bytes.Buffer)
 	binary.Write(buf, binary.LittleEndian, packet.Conn.Id)
-	buf.WriteByte(DATA)
+	buf.WriteByte(packet.Type)
 	binary.Write(buf, binary.LittleEndian, packet.serial)
-	binary.Write(buf, binary.LittleEndian, uint16(len(packet.Data)))
-	buf.Write(packet.Data)
+	if packet.Type == DATA {
+		binary.Write(buf, binary.LittleEndian, uint16(len(packet.Data)))
+		buf.Write(packet.Data)
+	}
 	// select transport
-	transport := s.transports[rand.Intn(len(s.transports))]
+	transport := s.transports[0]
+	if len(s.transports) > 0 {
+		transport = s.transports[rand.Intn(len(s.transports))]
+	}
 	// write to transport
 	s.Log("Start send through %v", transport)
 	t0 := time.Now()
@@ -333,14 +370,20 @@ func (s *Session) sendPacket(packet *Packet) {
 }
 
 func (s *Session) sendAck(packet *Packet) {
-	s.Log("send ack %d", packet.serial)
+	// check transport
+	if len(s.transports) == 0 {
+		return
+	}
 	// pack
 	buf := new(bytes.Buffer)
 	binary.Write(buf, binary.LittleEndian, packet.Conn.Id)
 	buf.WriteByte(ACK)
 	binary.Write(buf, binary.LittleEndian, packet.serial)
 	// select transport
-	transport := s.transports[rand.Intn(len(s.transports))]
+	transport := s.transports[0]
+	if len(s.transports) > 0 {
+		transport = s.transports[rand.Intn(len(s.transports))]
+	}
 	// write to transport
 	n, err := transport.Write(buf.Bytes())
 	if err != nil || n != len(buf.Bytes()) {
@@ -368,6 +411,12 @@ func (s *Session) handleIncomingPacket(packet *Packet) {
 		s.Log("in order %d", packet.serial)
 		s.recvIn <- packet
 		conn.ackSerial++
+		if packet.Type == FIN {
+			conn.remoteClosed = true
+			if conn.localClosed { // close conn
+				conn.Close()
+			}
+		}
 	} else if packet.serial > conn.ackSerial { // out of order
 		s.Log("out of order %d", packet.serial)
 		s.incomingPacketsMap[fmt.Sprintf("%d:%d", conn.Id, packet.serial)] = packet
@@ -381,6 +430,12 @@ func (s *Session) handleIncomingPacket(packet *Packet) {
 		s.Log("provide %d", packet.serial)
 		s.recvIn <- packet
 		conn.ackSerial++
+		if packet.Type == FIN {
+			conn.remoteClosed = true
+			if conn.localClosed { // close conn
+				conn.Close()
+			}
+		}
 		delete(s.incomingPacketsMap, nextKey)
 		nextKey = fmt.Sprintf("%d:%d", conn.Id, conn.ackSerial)
 		packet, ok = s.incomingPacketsMap[nextKey]
@@ -388,10 +443,7 @@ func (s *Session) handleIncomingPacket(packet *Packet) {
 }
 
 func (s *Session) handleIncomingAck(packet *Packet) {
-	packet.Conn = s.conns[packet.connId] // conn must be non-null here
-	s.Log("incoming ack %d", packet.serial)
-	conn := packet.Conn
-	key := fmt.Sprintf("%d:%d", conn.Id, packet.serial)
+	key := fmt.Sprintf("%d:%d", packet.connId, packet.serial)
 	if _, ok := s.sendingPacketsMap[key]; ok {
 		delete(s.sendingPacketsMap, key)
 		if len(s.sendingPacketsMap) < s.maxSendingPackets {
