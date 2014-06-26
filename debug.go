@@ -9,6 +9,11 @@ import (
 )
 
 func (s *Session) setDebugEntries() {
+	// statistics
+	s.AddDebugEntry(func() (ret []string) {
+		ret = append(ret, fmt.Sprintf("<In / Out> %s %s", formatBytes(s.inBytes), formatBytes(s.outBytes)))
+		return
+	})
 	// connections
 	s.AddDebugEntry(func() (ret []string) {
 		ret = append(ret, fmt.Sprintf("<Connections> %d", len(s.conns)))
@@ -18,9 +23,9 @@ func (s *Session) setDebugEntries() {
 		}
 		sort.Sort(sortByStart(conns))
 		for _, conn := range conns {
-			ret = append(ret, fmt.Sprintf("%02d:%02d:%02d id %d serial %d ackSerial %d",
+			ret = append(ret, fmt.Sprintf("%02d:%02d:%02d id %d serial %d out %s ackSerial %d in %s",
 				conn.start.Hour(), conn.start.Minute(), conn.start.Second(),
-				conn.Id, conn.serial, conn.ackSerial))
+				conn.Id, conn.serial, formatBytes(conn.outBytes), conn.ackSerial, formatBytes(conn.inBytes)))
 		}
 		return
 	})
@@ -45,7 +50,21 @@ func (s *Session) setDebugEntries() {
 		ret = append(ret, fmt.Sprintf("<Sending Packets> %d", len(s.sendingPacketsMap)))
 		return
 	})
-	// statistics TODO
+}
+
+func formatBytes(n int) string {
+	units := "bKMGTP"
+	i := 0
+	result := ""
+	for n > 0 {
+		res := n % 1024
+		if res > 0 {
+			result = fmt.Sprintf("%d%c", res, units[i]) + result
+		}
+		n /= 1024
+		i++
+	}
+	return result
 }
 
 type sortByStart []*Conn

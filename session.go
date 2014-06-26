@@ -55,6 +55,8 @@ type Session struct {
 	// statistics and debug
 	debugEntries []func() []string
 	statResend   int
+	inBytes int
+	outBytes int
 }
 
 type Conn struct {
@@ -64,6 +66,8 @@ type Conn struct {
 	localClosed  bool
 	remoteClosed bool
 	start        time.Time
+	inBytes      int
+	outBytes     int
 }
 
 type Packet struct {
@@ -305,6 +309,8 @@ func (s *Session) Send(conn *Conn, data []byte) uint32 {
 		Data:   data,
 	}
 	conn.serial++
+	conn.outBytes += len(packet.Data)
+	s.outBytes += len(packet.Data)
 	s.outgoingPackets <- packet
 	return packet.serial
 }
@@ -409,6 +415,8 @@ func (s *Session) handleIncomingPacket(packet *Packet) {
 		s.Log("in order %d", packet.serial)
 		s.recvIn <- packet
 		conn.ackSerial++
+		conn.inBytes += len(packet.Data)
+		s.inBytes += len(packet.Data)
 		if packet.Type == FIN {
 			conn.remoteClosed = true
 			if conn.localClosed { // close conn
@@ -428,6 +436,8 @@ func (s *Session) handleIncomingPacket(packet *Packet) {
 		s.Log("provide %d", packet.serial)
 		s.recvIn <- packet
 		conn.ackSerial++
+		conn.inBytes += len(packet.Data)
+		s.inBytes += len(packet.Data)
 		if packet.Type == FIN {
 			conn.remoteClosed = true
 			if conn.localClosed { // close conn
