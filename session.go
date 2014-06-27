@@ -2,6 +2,7 @@ package van
 
 import (
 	"bytes"
+	"container/list"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -25,11 +26,10 @@ type Session struct {
 	closer.Closer
 	*signaler.Signaler
 
-	id               int64
-	transports       []Transport
-	conns            map[uint32]*Conn
-	closedConnIdEdge uint32
-	closedConnIdMap  map[uint32]bool
+	id            int64
+	transports    []Transport
+	conns         map[uint32]*Conn
+	closedConnIds *list.List
 
 	newTransport chan Transport
 	errTransport chan Transport
@@ -55,6 +55,11 @@ type Session struct {
 	resentBytes   int
 	inBytes       int
 	outBytes      int
+}
+
+type connIdRange struct {
+	left  uint32
+	right uint32
 }
 
 type Conn struct {
@@ -84,7 +89,7 @@ func makeSession() *Session {
 		Closer:             closer.NewCloser(),
 		Signaler:           signaler.NewSignaler(),
 		conns:              make(map[uint32]*Conn),
-		closedConnIdMap:    make(map[uint32]bool),
+		closedConnIds:      list.New(),
 		newTransport:       make(chan Transport, 128),
 		errTransport:       make(chan Transport),
 		incomingPackets:    make(chan *Packet),
@@ -265,12 +270,42 @@ func (s *Session) makeConn() *Conn {
 
 func (s *Session) closeConn(conn *Conn) {
 	delete(s.conns, conn.Id)
-	s.closedConnIdMap[conn.Id] = true
-	next := s.closedConnIdEdge + 1
-	for s.closedConnIdMap[next] {
-		delete(s.closedConnIdMap, next)
-		s.closedConnIdEdge = next
-		next++
+	// insert id
+	merged := false
+	for e := s.closedConnIds.Front(); e != nil; e = e.Next() {
+		r := e.Value.(*connIdRange)
+		if conn.Id == r.left-1 {
+			r.left = conn.Id
+			merged = true
+			break
+		} else if conn.Id == r.right+1 {
+			r.right = conn.Id
+			merged = true
+			// try merge next range
+			if next := e.Next(); next != nil {
+				nr := next.Value.(*connIdRange)
+				if nr.left == r.right+1 {
+					r.right = nr.right
+					s.closedConnIds.Remove(next)
+				}
+			}
+			break
+		} else if conn.Id < r.left-1 {
+			r := &connIdRange{
+				left:  conn.Id,
+				right: conn.Id,
+			}
+			s.closedConnIds.InsertBefore(r, e)
+			merged = true
+			break
+		}
+	}
+	if !merged {
+		r := &connIdRange{
+			left:  conn.Id,
+			right: conn.Id,
+		}
+		s.closedConnIds.PushBack(r)
 	}
 }
 
@@ -385,7 +420,19 @@ func (s *Session) sendAck(packet *Packet) {
 func (s *Session) handleIncomingPacket(packet *Packet) {
 	conn, ok := s.conns[packet.connId]
 	if !ok {
-		if packet.connId <= s.closedConnIdEdge || s.closedConnIdMap[packet.connId] { // orphan packet
+		// check whether closed
+		isClosed := false
+		for e := s.closedConnIds.Back(); e != nil; e = e.Prev() {
+			r := e.Value.(*connIdRange)
+			if packet.connId > r.right {
+				break
+			}
+			if packet.connId >= r.left && packet.connId <= r.right {
+				isClosed = true
+				break
+			}
+		}
+		if isClosed {
 			return
 		}
 		// create new incoming conn

@@ -11,7 +11,7 @@ import (
 func (s *Session) setDebugEntries() {
 	// statistics
 	s.AddDebugEntry(func() (ret []string) {
-		ret = append(ret, fmt.Sprintf("<In / Out> %s %s", formatBytes(s.inBytes), formatBytes(s.outBytes)))
+		ret = append(ret, fmt.Sprintf("<In / Out> %s / %s", formatBytes(s.inBytes), formatBytes(s.outBytes)))
 		return
 	})
 	// sending packets
@@ -45,14 +45,12 @@ func (s *Session) setDebugEntries() {
 		return
 	})
 	s.AddDebugEntry(func() (ret []string) {
-		ret = append(ret, fmt.Sprintf("<Closed Connection Ids> %d", s.closedConnIdEdge))
-		ids := ""
-		for id, _ := range s.closedConnIdMap {
-			ids += fmt.Sprintf("%d ", id)
+		line := "<Closed Connection Ids>"
+		for e := s.closedConnIds.Front(); e != nil; e = e.Next() {
+			r := e.Value.(*connIdRange)
+			line += fmt.Sprintf(" %d-%d", r.left, r.right)
 		}
-		if len(ids) > 0 {
-			ret = append(ret, ids)
-		}
+		ret = append(ret, line)
 		return
 	})
 	// transports
