@@ -14,6 +14,21 @@ func (s *Session) setDebugEntries() {
 		ret = append(ret, fmt.Sprintf("<In / Out> %s %s", formatBytes(s.inBytes), formatBytes(s.outBytes)))
 		return
 	})
+	// sending packets
+	s.AddDebugEntry(func() (ret []string) {
+		ret = append(ret, fmt.Sprintf("<Sending Packets> %d", len(s.sendingPacketsMap)))
+		return
+	})
+	// incoming packets
+	s.AddDebugEntry(func() (ret []string) {
+		ret = append(ret, fmt.Sprintf("<Incoming Packets> %d", len(s.incomingPacketsMap)))
+		return
+	})
+	// resent stat
+	s.AddDebugEntry(func() (ret []string) {
+		ret = append(ret, fmt.Sprintf("<Resend> %d %s", s.resentPackets, formatBytes(s.resentBytes)))
+		return
+	})
 	// connections
 	s.AddDebugEntry(func() (ret []string) {
 		ret = append(ret, fmt.Sprintf("<Connections> %d", len(s.conns)))
@@ -40,14 +55,12 @@ func (s *Session) setDebugEntries() {
 		}
 		return
 	})
-	// incoming packets
+	// transports
 	s.AddDebugEntry(func() (ret []string) {
-		ret = append(ret, fmt.Sprintf("<Incoming Packets> %d", len(s.incomingPacketsMap)))
-		return
-	})
-	// sending packets
-	s.AddDebugEntry(func() (ret []string) {
-		ret = append(ret, fmt.Sprintf("<Sending Packets> %d", len(s.sendingPacketsMap)))
+		ret = append(ret, "<Transports>")
+		for _, t := range s.transports {
+			ret = append(ret, fmt.Sprintf("%s", t.RemoteAddr().String()))
+		}
 		return
 	})
 }

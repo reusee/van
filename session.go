@@ -53,10 +53,11 @@ type Session struct {
 	SetMaxSendingPackets chan int
 
 	// statistics and debug
-	debugEntries []func() []string
-	statResend   int
-	inBytes int
-	outBytes int
+	debugEntries  []func() []string
+	resentPackets int
+	resentBytes   int
+	inBytes       int
+	outBytes      int
 }
 
 type Conn struct {
@@ -78,9 +79,7 @@ type Packet struct {
 	serial uint32
 	Data   []byte
 
-	sentTime          time.Time
-	resendTimeout     time.Duration
-	baseResendTimeout time.Duration
+	resendAt time.Time
 }
 
 func makeSession() *Session {
@@ -152,7 +151,7 @@ func (s *Session) start() {
 		return len(s.transports)
 	})
 	selector.Add(s.getStatResend, nil, func() interface{} {
-		return s.statResend
+		return s.resentPackets
 	})
 	// setters
 	selector.Add(s.SetMaxSendingPackets, func(recv interface{}) {
@@ -294,7 +293,7 @@ func (s *Session) handleOutgoingPacket(packet *Packet) {
 func (s *Session) checkOutgoingPackets() {
 	now := time.Now()
 	for _, packet := range s.sendingPacketsMap {
-		if packet.resendTimeout == 0 || packet.resendTimeout > 0 && packet.sentTime.Add(packet.resendTimeout).After(now) {
+		if now.After(packet.resendAt) {
 			s.Log("resend %d", packet.serial)
 			s.sendPacket(packet)
 		}
@@ -351,6 +350,7 @@ func (s *Session) sendPacket(packet *Packet) {
 	// write to transport
 	s.Log("Start send through %v", transport)
 	t0 := time.Now()
+	transport.SetWriteDeadline(time.Now().Add(time.Second * 5))
 	n, err := transport.Write(buf.Bytes())
 	s.Log("Sent in %v", time.Now().Sub(t0))
 	if err != nil || n != len(buf.Bytes()) {
@@ -359,17 +359,13 @@ func (s *Session) sendPacket(packet *Packet) {
 			return
 		}
 	}
-	// set packet
-	packet.sentTime = time.Now()
-	if packet.resendTimeout == 0 { // newly created packet
-		packet.resendTimeout = time.Millisecond * 5000 // first resend timeout
-		packet.baseResendTimeout = time.Millisecond * 5000
-	} else {
-		packet.baseResendTimeout *= 2
-		packet.resendTimeout = packet.baseResendTimeout + time.Millisecond*time.Duration(rand.Intn(1000))
-		// stat
-		s.statResend++
+	// stat
+	if packet.resendAt.Year() > 1970 { // is resend
+		s.resentPackets++
+		s.resentBytes += len(packet.Data)
 	}
+	// set packet
+	packet.resendAt = time.Now().Add(time.Second * 5)
 }
 
 func (s *Session) sendAck(packet *Packet) {
@@ -388,6 +384,7 @@ func (s *Session) sendAck(packet *Packet) {
 		transport = s.transports[rand.Intn(len(s.transports))]
 	}
 	// write to transport
+	transport.SetWriteDeadline(time.Now().Add(time.Second * 5))
 	n, err := transport.Write(buf.Bytes())
 	if err != nil || n != len(buf.Bytes()) {
 		if !s.IsClosing {
