@@ -42,15 +42,12 @@ type Session struct {
 
 	outgoingPackets   chan *Packet
 	outCheckTicker    *time.Ticker
-	maxSendingPackets int
 	sendingPacketsMap map[string]*Packet
 	outPacketCase     *se.Case
 
 	// getters
 	getTransportCount chan int
 	getStatResend     chan int
-	// setters
-	SetMaxSendingPackets chan int
 
 	// statistics and debug
 	debugEntries  []func() []string
@@ -97,7 +94,6 @@ func makeSession() *Session {
 		Recv:               make(chan *Packet),
 		outgoingPackets:    make(chan *Packet),
 		sendingPacketsMap:  make(map[string]*Packet),
-		maxSendingPackets:  65536,
 		outCheckTicker:     time.NewTicker(time.Millisecond * 100),
 		getTransportCount:  make(chan int),
 		getStatResend:      make(chan int),
@@ -153,10 +149,6 @@ func (s *Session) start() {
 	selector.Add(s.getStatResend, nil, func() interface{} {
 		return s.resentPackets
 	})
-	// setters
-	selector.Add(s.SetMaxSendingPackets, func(recv interface{}) {
-		s.maxSendingPackets = recv.(int)
-	}, nil)
 
 	// main loop
 	for !closing {
@@ -284,9 +276,6 @@ func (s *Session) closeConn(conn *Conn) {
 
 func (s *Session) handleOutgoingPacket(packet *Packet) {
 	s.sendingPacketsMap[fmt.Sprintf("%d:%d", packet.Conn.Id, packet.serial)] = packet
-	if len(s.sendingPacketsMap) >= s.maxSendingPackets {
-		s.outPacketCase.Disable()
-	}
 	s.sendPacket(packet)
 }
 
@@ -451,8 +440,5 @@ func (s *Session) handleIncomingAck(packet *Packet) {
 	key := fmt.Sprintf("%d:%d", packet.connId, packet.serial)
 	if _, ok := s.sendingPacketsMap[key]; ok {
 		delete(s.sendingPacketsMap, key)
-		if len(s.sendingPacketsMap) < s.maxSendingPackets {
-			s.outPacketCase.Enable()
-		}
 	}
 }
